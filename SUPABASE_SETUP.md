@@ -67,8 +67,8 @@ CREATE TABLE IF NOT EXISTS downloads (
 プロジェクトルートに `.env.local` ファイルを作成：
 
 ```
-SUPABASE_URL=https://xxxxx.supabase.co
-SUPABASE_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+SUPABASE_URL=https://pbtawxjpkrystmchmmjo.supabase.co
+SUPABASE_KEY=sb_publishable_N7iVoEgiSYA3KMkXSJjxnw_mPNW0Okt
 ```
 
 ### Streamlit Cloud にデプロイする場合
