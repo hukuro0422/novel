@@ -3,14 +3,31 @@ from supabase import create_client, Client
 from datetime import datetime
 import base64
 from io import BytesIO
+from dotenv import load_dotenv
+
+# .env.local を読み込む（ローカル実行用）
+load_dotenv('.env.local')
 
 SUPABASE_URL = os.getenv("SUPABASE_URL", "")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY", "")
 
-if not SUPABASE_URL or not SUPABASE_KEY:
-    raise ValueError("SUPABASE_URL and SUPABASE_KEY environment variables are required")
+def get_supabase_client():
+    """Streamlit Cloudとローカル実行の両方に対応"""
+    try:
+        import streamlit as st
+        url = st.secrets.get("SUPABASE_URL") or SUPABASE_URL
+        key = st.secrets.get("SUPABASE_KEY") or SUPABASE_KEY
+    except:
+        url = SUPABASE_URL
+        key = SUPABASE_KEY
 
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+    if not url or not key:
+        raise ValueError("SUPABASE_URL and SUPABASE_KEY environment variables are required")
+
+    return create_client(url, key)
+
+# グローバルクライアント（ローカル実行用）
+supabase: Client = get_supabase_client()
 
 
 def create_tables():
