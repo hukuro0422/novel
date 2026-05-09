@@ -2,6 +2,7 @@ import streamlit as st
 import tempfile
 import os
 import zipfile
+import time
 from datetime import datetime
 import base64
 from io import BytesIO
@@ -327,6 +328,69 @@ def settings_page():
         st.rerun()
     
     st.divider()
+
+
+def update_check_page():
+    """全て更新チェックページ"""
+    st.title("🔄 全て更新チェック")
+
+    if st.button("← ダッシュボードに戻る"):
+        st.session_state.current_page = "dashboard"
+        st.rerun()
+
+    st.divider()
+
+    # 登録済み小説を取得
+    novels = get_user_novels(st.session_state.user_email)
+
+    if not novels:
+        st.info("登録済み小説がありません")
+        return
+
+    st.subheader("更新チェック結果")
+
+    # プログレスバー
+    progress_bar = st.progress(0)
+    status_text = st.empty()
+
+    total_novels = len(novels)
+    updated_count = 0
+
+    for i, novel in enumerate(novels):
+        status_text.text(f"チェック中: {novel['title']} ({i+1}/{total_novels})")
+
+        try:
+            # 最新章数を取得
+            from novel_downloader import get_latest_chapter_count
+            current_chapters = get_latest_chapter_count(novel['url'])
+
+            if current_chapters > novel['latest_chapter']:
+                # 更新あり
+                st.success(f"📈 **{novel['title']}**: {novel['latest_chapter']}話 → {current_chapters}話 (+{current_chapters - novel['latest_chapter']}話)")
+
+                # データベースを更新
+                update_latest_chapter(novel['id'], current_chapters)
+                updated_count += 1
+            else:
+                # 更新なし
+                st.info(f"✅ **{novel['title']}**: 更新なし ({novel['latest_chapter']}話)")
+
+        except Exception as e:
+            st.error(f"❌ **{novel['title']}**: チェック失敗 - {str(e)}")
+
+        # プログレス更新
+        progress_bar.progress((i + 1) / total_novels)
+
+        # 少し待機してサーバーに負荷をかけない
+        time.sleep(1)
+
+    progress_bar.empty()
+    status_text.empty()
+
+    if updated_count > 0:
+        st.success(f"更新チェック完了！ {updated_count}件の小説が更新されました。")
+    else:
+        st.info("更新チェック完了！ 更新はありませんでした。")
     
     st.subheader("表紙画像の管理")
     
@@ -379,3 +443,5 @@ elif st.session_state.current_page == "download":
     download_page()
 elif st.session_state.current_page == "settings":
     settings_page()
+elif st.session_state.current_page == "update_check":
+    update_check_page()

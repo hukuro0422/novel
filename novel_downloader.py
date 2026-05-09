@@ -649,4 +649,125 @@ def create_epub(
                 cover_path
             )
 
+    return book_folder
+
+
+def get_latest_chapter_count(url: str, log_callback=None) -> int:
+    """
+    指定されたURLの小説の最新章数を取得する
+    """
+    session = create_session()
+    site_type = detect_site(url)
+
+    if site_type == "narou":
+        top_url = normalize_narou_url(url)
+
+        if log_callback:
+            log_callback("小説家になろうの最新章数を取得中")
+
+        structure = []
+        current_idx = top_url
+        visited = set()
+        seen_ids = set()
+
+        while current_idx:
+            if current_idx in visited:
+                break
+
+            visited.add(current_idx)
+            soup = get_soup(session, current_idx, log_callback)
+
+            if not soup:
+                break
+
+            # 目次取得
+            toc = soup.select_one("#novel_honbun")
+            if toc:
+                for a in toc.find_all("a"):
+                    href = a.get("href")
+                    if href and "/n" in href:
+                        full_url = urljoin(current_idx, href)
+                        if full_url not in seen_ids:
+                            seen_ids.add(full_url)
+                            structure.append({
+                                "url": full_url,
+                                "title": a.get_text(strip=True)
+                            })
+
+            # 次ページ
+            next_link = soup.select_one("a[title='次へ']")
+            if next_link:
+                current_idx = urljoin(current_idx, next_link.get("href"))
+            else:
+                current_idx = None
+
+        return len(structure)
+
+    elif site_type == "kakuyomu":
+        top_url = normalize_kakuyomu_url(url)
+
+        if log_callback:
+            log_callback("カクヨムの最新章数を取得中")
+
+        soup = get_soup(session, top_url, log_callback)
+
+        if not soup:
+            return 0
+
+        next_data_script = soup.find("script", id="__NEXT_DATA__")
+
+        if not next_data_script:
+            return 0
+
+        data = json.loads(next_data_script.string)
+        apollo = data.get("props", {}).get("pageProps", {}).get("__APOLLO_STATE__", {})
+
+        def resolve(obj):
+            if isinstance(obj, dict) and "__ref" in obj:
+                return apollo.get(obj["__ref"])
+            return obj
+
+        # 作品情報取得
+        work_id = top_url.rstrip("/").split("/")[-1]
+        work_key = f"Work:{work_id}"
+
+        if work_key not in apollo:
+            return 0
+
+        work = apollo[work_key]
+
+        # 目次構造取得
+        toc_key = work.get("tableOfContents", {}).get("__ref")
+        if not toc_key or toc_key not in apollo:
+            return 0
+
+        toc = apollo[toc_key]
+
+        final_structure = []
+
+        for item_ref in toc.get("items", []):
+            item = resolve(item_ref)
+
+            if item and item.get("__typename") == "TableOfContentsChapterItem":
+                final_structure.append({
+                    "type": "chapter",
+                    "title": item.get("title", "")
+                })
+
+            for union_ref in (item.get("episodeUnions") or []):
+                episode = resolve(union_ref)
+
+                if episode and episode.get("__typename") == "Episode":
+                    final_structure.append({
+                        "type": "episode",
+                        "id": episode.get("id"),
+                        "title": episode.get("title") or "無題"
+                    })
+
+        episode_list = [s for s in final_structure if s["type"] == "episode"]
+        return len(episode_list)
+
+    else:
+        return 0
+
         return book_folder
