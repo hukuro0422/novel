@@ -7,7 +7,7 @@ from datetime import datetime
 import base64
 from io import BytesIO
 
-from novel_downloader import create_epub
+from novel_downloader import create_epub, get_latest_chapter_count
 from database import (
     get_user_by_email,
     register_user,
@@ -19,18 +19,57 @@ from database import (
     update_cover_image,
     get_download_history
 )
+import streamlit as st
+from streamlit_cookies_manager import EncryptedCookieManager
+import warnings
 
+warnings.filterwarnings(
+    "ignore",
+    message="st.cache is deprecated"
+)
+
+# 必ず最初
 st.set_page_config(
     page_title="Novel Downloader",
     page_icon="📚",
     layout="wide"
 )
 
+# Cookie管理
+cookies = EncryptedCookieManager(
+    prefix="novel_downloader/",
+    password=st.secrets.get(
+        "COOKIE_PASSWORD",
+        "novel-downloader-local-fallback-key-2026"
+    )
+)
+
+
+# Cookie の準備が完了するまで待つ
+if not cookies.ready():
+    st.info("ブラウザ設定を読み込み中です...")
+    st.stop()
+
+# ===== デバッグ表示（Cookie の状態確認）=====
+with st.expander("🔍 Cookie デバッグ情報"):
+    st.write("cookies.ready() =", cookies.ready())
+    st.write("保存されている user_email =", cookies.get("user_email"))
+    st.write("ブラウザが Cookie を受け入れていない場合、この値は None になります。")
+
+
 # セッション初期化
 if "user_email" not in st.session_state:
     st.session_state.user_email = None
 if "current_page" not in st.session_state:
     st.session_state.current_page = "login"
+
+if st.session_state.user_email is None:
+    saved_email = cookies.get("user_email")
+    if saved_email:
+        user = get_user_by_email(saved_email)
+        if user:
+            st.session_state.user_email = saved_email
+            st.session_state.current_page = "dashboard"
 
 
 def log(msg):
@@ -49,6 +88,7 @@ def login_page():
     st.title("📚 Novel Downloader")
     
     col1, col2 = st.columns(2)
+    st.write("Saved cookie:", cookies.get("user_email"))
     
     with col1:
         st.subheader("新規登録")
@@ -58,8 +98,16 @@ def login_page():
                 success, msg = register_user(email_new)
                 if success:
                     st.success(msg)
+
+                    # Cookie に保存（rerun の前に実行する）
+                    cookies["user_email"] = email_new
+                    cookies.save()
+
+                    # セッションに保存
                     st.session_state.user_email = email_new
                     st.session_state.current_page = "dashboard"
+
+                    # 画面更新
                     st.rerun()
                 else:
                     st.error(msg)
@@ -74,8 +122,16 @@ def login_page():
                 user = get_user_by_email(email_login)
                 if user:
                     st.success("ログインしました")
+
+                    # Cookie に保存（rerun の前に実行する）
+                    cookies["user_email"] = email_login
+                    cookies.save()
+
+                    # セッションに保存
                     st.session_state.user_email = email_login
                     st.session_state.current_page = "dashboard"
+
+                    # 画面更新
                     st.rerun()
                 else:
                     st.error("このメールアドレスは登録されていません")
@@ -91,6 +147,9 @@ def dashboard_page():
     if st.button("ログアウト"):
         st.session_state.user_email = None
         st.session_state.current_page = "login"
+        if "user_email" in cookies:
+            del cookies["user_email"]
+        cookies.save()
         st.rerun()
     
     col1, col2, col3 = st.columns(3)
@@ -123,7 +182,9 @@ def dashboard_page():
         with col1:
             st.write(f"**{novel['title']}**")
             st.caption(f"URL: {novel['url']}")
-            st.caption(f"最新話数: {novel['latest_chapter']} 話")
+            # 毎回最新の全話数を取得して表示
+            current_total = get_latest_chapter_count(novel['url'])
+            st.caption(f"全話数: {current_total} 話")
             if novel['registered_at']:
                 st.caption(f"登録日: {novel['registered_at'][:10]}")
         
@@ -134,10 +195,28 @@ def dashboard_page():
                 st.rerun()
         
         with col3:
-            if st.button("🗑️ 削除", key=f"delete_{novel['id']}"):
-                delete_novel(novel['id'])
-                st.success("削除しました")
-                st.rerun()
+            if st.button("🗑️ 削除", key=f"delete_novel_{novel['id']}"):
+                try:
+                    success = delete_novel(novel['id'])
+
+                    if success:
+                        st.success(f"「{novel['title']}」を削除しました。")
+
+                        # ダウンロード画面で選択中だった場合は解除
+                        if (
+                            "selected_novel" in st.session_state
+                            and st.session_state.selected_novel.get("id") == novel["id"]
+                        ):
+                            del st.session_state["selected_novel"]
+
+                        # ダッシュボードを再読み込み
+                        st.session_state.current_page = "dashboard"
+                        st.rerun()
+                    else:
+                        st.error("削除に失敗しました。もう一度お試しください。")
+
+                except Exception as e:
+                    st.error(f"削除中にエラーが発生しました: {e}")
         
         st.divider()
 
@@ -196,9 +275,9 @@ def add_novel_page():
                 )
                 
                 if success:
-                    # 最新話数を更新
                     epub_files = [f for f in os.listdir(output_folder) if f.endswith(".epub")]
-                    update_latest_chapter(novel_id, len(epub_files))
+                    actual_total = get_latest_chapter_count(url)
+                    update_latest_chapter(novel_id, actual_total)
                     
                     st.success("小説を登録しました！")
                     
@@ -221,7 +300,7 @@ def add_novel_page():
                     record_download(
                         st.session_state.user_email,
                         novel_id,
-                        len(epub_files),
+                        actual_total,
                         zip_path
                     )
                     
@@ -255,7 +334,7 @@ def download_page():
         st.image(cover_bytes, width=200)
     
     st.write(f"**URL:** {novel['url']}")
-    st.write(f"**最新話数:** {novel['latest_chapter']} 話")
+    st.write(f"**全話数:** {novel['latest_chapter']} 話")
     
     if st.button("📖 ダウンロード開始"):
         try:
@@ -279,13 +358,14 @@ def download_page():
                 )
             
             work_title = os.path.basename(output_folder)
-            
-            # 最新話数を更新
             epub_files = [f for f in os.listdir(output_folder) if f.endswith(".epub")]
-            new_chapter_count = len(epub_files)
-            old_chapter_count = novel.get('latest_chapter', 0)
             
-            update_latest_chapter(novel['id'], new_chapter_count)
+            # 実際の全話数を取得して保存
+            actual_total = get_latest_chapter_count(novel['url'])
+            old_chapter_count = novel.get('latest_chapter', 0)
+            st.write(f"デバッグ: URL={novel['url']}, actual_total={actual_total}, old={old_chapter_count}")  # デバッグ用
+            
+            update_latest_chapter(novel['id'], actual_total)
             
             # ZIPファイルを作成
             zip_path = os.path.join(output_folder, f"{work_title}.zip")
@@ -306,12 +386,12 @@ def download_page():
             record_download(
                 st.session_state.user_email,
                 novel['id'],
-                new_chapter_count,
+                actual_total,
                 zip_path
             )
             
-            if new_chapter_count > old_chapter_count:
-                st.success(f"✅ {new_chapter_count - old_chapter_count}話新しい話が追加されていました！")
+            if actual_total > old_chapter_count:
+                st.success(f"✅ {actual_total - old_chapter_count}話新しい話が追加されていました！")
             else:
                 st.info("新しい話はまだアップロードされていません")
             
@@ -366,14 +446,17 @@ def update_check_page():
 
             if current_chapters > novel['latest_chapter']:
                 # 更新あり
-                st.success(f"📈 **{novel['title']}**: {novel['latest_chapter']}話 → {current_chapters}話 (+{current_chapters - novel['latest_chapter']}話)")
+                st.success(
+                    f"📈 **{novel['title']}**: 保存中の話数 {novel['latest_chapter']}話 → 現在の全話数 {current_chapters}話 "
+                    f"(+{current_chapters - novel['latest_chapter']}話)"
+                )
 
                 # データベースを更新
                 update_latest_chapter(novel['id'], current_chapters)
                 updated_count += 1
             else:
                 # 更新なし
-                st.info(f"✅ **{novel['title']}**: 更新なし ({novel['latest_chapter']}話)")
+                st.info(f"✅ **{novel['title']}**: 更新なし (現在の全話数 {novel['latest_chapter']}話)")
 
         except Exception as e:
             st.error(f"❌ **{novel['title']}**: チェック失敗 - {str(e)}")

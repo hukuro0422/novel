@@ -138,13 +138,19 @@ def get_download_history(email: str, novel_id: int):
         return None
 
 
-def delete_novel(novel_id: int):
-    """小説を削除"""
+def delete_novel(novel_id):
     try:
+        # ダウンロード履歴を削除（正しいテーブル名は downloads）
+        supabase.table("downloads").delete().eq("novel_id", novel_id).execute()
+
+        # 小説データを削除
         supabase.table("novels").delete().eq("id", novel_id).execute()
+
         return True
+
     except Exception as e:
-        return False
+        print(f"delete_novel error: {e}")
+        raise
 
 
 def update_cover_image(novel_id: int, cover_image):

@@ -5,3 +5,4 @@ ebooklib
 lxml
 supabase
 python-dotenv
+streamlit-cookies-manager

@@ -652,6 +652,91 @@ def create_epub(
     return book_folder
 
 
+def _get_narou_episode_count_from_top_page(soup, top_url):
+    if not soup:
+        return 0
+
+    episode_urls = set()
+
+    # 新しい小説家になろうレイアウト: 目次リストのエピソードリンクを直接カウント
+    for a in soup.select(".p-eplist__sublist > a, .p-eplist__sublist .p-eplist__subtitle"):
+        href = a.get("href")
+        if href and "/" in href:
+            full_url = urljoin(top_url, href)
+            episode_urls.add(full_url)
+
+    return len(episode_urls)
+
+
+def _get_kakuyomu_internal_work_id(url, session, log_callback=None):
+    parsed = urlparse(url)
+    path_parts = parsed.path.strip("/").split("/")
+
+    if len(path_parts) < 2 or path_parts[0] != "works":
+        return None
+
+    work_id = path_parts[1]
+    search_url = f"https://kakuyomu.jp/search?work_id={work_id}"
+
+    if log_callback:
+        log_callback("カクヨムの作品IDを検索中")
+
+    res = session.get(search_url, timeout=15)
+    if res.status_code != 200:
+        return None
+
+    soup = BeautifulSoup(res.content, "html.parser")
+    internal_ids = []
+    for a in soup.select('a[href^="/works/"]'):
+        href = a.get("href")
+        if not href:
+            continue
+        parts = href.strip("/").split("/")
+        if len(parts) == 2 and parts[0] == "works":
+            internal_id = parts[1]
+            if internal_id not in internal_ids:
+                internal_ids.append(internal_id)
+
+    return internal_ids[0] if internal_ids else None
+
+
+def _get_kakuyomu_episode_count_from_graphql(internal_id, session, log_callback=None):
+    if not internal_id:
+        return 0
+
+    if log_callback:
+        log_callback("カクヨムの全話数を取得中")
+
+    query = '''
+    query GetWorks($ids: [ID!]!) {
+      works(ids: $ids) {
+        id
+        title
+        publicEpisodeCount
+      }
+    }
+    '''
+
+    try:
+        res = session.post(
+            "https://kakuyomu.jp/graphql",
+            json={"query": query, "variables": {"ids": [internal_id]}},
+            timeout=15,
+            headers={"Content-Type": "application/json"}
+        )
+        res.raise_for_status()
+        data = res.json()
+    except Exception:
+        return 0
+
+    works = data.get("data", {}).get("works")
+    if not works:
+        return 0
+
+    work = works[0]
+    return int(work.get("publicEpisodeCount", 0) or 0)
+
+
 def get_latest_chapter_count(url: str, log_callback=None) -> int:
     """
     指定されたURLの小説の最新章数を取得する
@@ -664,6 +749,11 @@ def get_latest_chapter_count(url: str, log_callback=None) -> int:
 
         if log_callback:
             log_callback("小説家になろうの最新章数を取得中")
+
+        soup = get_soup(session, top_url, log_callback)
+        count = _get_narou_episode_count_from_top_page(soup, top_url)
+        if count > 0:
+            return count
 
         structure = []
         current_idx = top_url
@@ -705,6 +795,12 @@ def get_latest_chapter_count(url: str, log_callback=None) -> int:
 
     elif site_type == "kakuyomu":
         top_url = normalize_kakuyomu_url(url)
+
+        internal_id = _get_kakuyomu_internal_work_id(top_url, session, log_callback)
+        if internal_id:
+            count = _get_kakuyomu_episode_count_from_graphql(internal_id, session, log_callback)
+            if count > 0:
+                return count
 
         if log_callback:
             log_callback("カクヨムの最新章数を取得中")
@@ -769,5 +865,3 @@ def get_latest_chapter_count(url: str, log_callback=None) -> int:
 
     else:
         return 0
-
-        return book_folder
