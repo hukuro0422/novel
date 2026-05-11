@@ -79,8 +79,13 @@ def log(msg):
 
 def progress(i, percent, title):
     if "progress_bar" in st.session_state:
-        st.session_state.progress_bar.progress(int(percent))
-        st.session_state.log_area.text(f"{i}話目取得中: {title}")
+        # 0〜100の範囲に制限
+        st.session_state.progress_bar.progress(min(int(percent), 100))
+
+        # 現在の進捗を表示
+        st.session_state.log_area.text(
+            f"{i}話目取得中 ({percent:.1f}%): {title}"
+        )
 
 
 def login_page():
@@ -347,7 +352,16 @@ def download_page():
         st.image(cover_bytes, width=200)
     
     st.write(f"**URL:** {novel['url']}")
-    st.write(f"**全話数:** {novel['latest_chapter']} 話")
+    # 最新の全話数を取得して表示
+    current_total = get_latest_chapter_count(novel['url'])
+
+    # 表示
+    st.write(f"**全話数:** {current_total} 話")
+
+    # DBの値が古ければ更新
+    if current_total != novel['latest_chapter']:
+        update_latest_chapter(novel['id'], current_total)
+        novel['latest_chapter'] = current_total
     
     if st.button("📖 ダウンロード開始"):
         try:

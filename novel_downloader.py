@@ -653,17 +653,48 @@ def create_epub(
 
 
 def _get_narou_episode_count_from_top_page(soup, top_url):
+    """
+    小説家になろうの全話数を取得する。
+    目次が複数ページに分かれていてもすべて数える。
+    """
     if not soup:
         return 0
 
+    session = create_session()
     episode_urls = set()
+    current_url = top_url
+    visited = set()
 
-    # 新しい小説家になろうレイアウト: 目次リストのエピソードリンクを直接カウント
-    for a in soup.select(".p-eplist__sublist > a, .p-eplist__sublist .p-eplist__subtitle"):
-        href = a.get("href")
-        if href and "/" in href:
-            full_url = urljoin(top_url, href)
-            episode_urls.add(full_url)
+    while current_url:
+        if current_url in visited:
+            break
+        visited.add(current_url)
+
+        soup = get_soup(session, current_url)
+        if not soup:
+            break
+
+        # 現在のページ内の話数を取得
+        for a in soup.select(
+            ".p-eplist__sublist > a, "
+            ".p-eplist__sublist .p-eplist__subtitle"
+        ):
+            href = a.get("href")
+            if href:
+                full_url = urljoin(current_url, href)
+                episode_urls.add(full_url)
+
+        # 次ページリンクを探す
+        next_link = soup.find(
+            "a",
+            string=lambda s: s and "次へ" in s
+        )
+
+        if next_link:
+            current_url = urljoin(current_url, next_link["href"])
+            time.sleep(0.2)
+        else:
+            current_url = None
 
     return len(episode_urls)
 
