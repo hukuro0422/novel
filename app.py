@@ -297,20 +297,25 @@ def add_novel_page():
                             zipf.write(full_path, arcname=epub_file)
                     
                     with open(zip_path, "rb") as f:
-                        st.download_button(
+                        downloaded = st.download_button(
                             label="📥 ZIPをダウンロード",
                             data=f,
                             file_name=f"{work_title}.zip",
                             mime="application/zip"
                         )
                     
-                    # ダウンロード履歴を記録
-                    record_download(
-                        st.session_state.user_email,
-                        novel_id,
-                        actual_total,
-                        zip_path
-                    )
+                    if downloaded:
+                        # 実際にボタンが押された時だけ記録
+                        record_download(
+                            st.session_state.user_email,
+                            novel_id,
+                            actual_total,
+                            zip_path
+                        )
+
+                        update_latest_chapter(novel_id, actual_total)
+
+                        st.success("ダウンロード履歴を更新しました。")
                     
                     st.info("ダッシュボードでいつでもダウンロードできます")
                 else:
@@ -485,15 +490,15 @@ def update_check_page():
     
     st.subheader("表紙画像の管理")
     
-    novels = get_user_novels(st.session_state.user_email)
+    cover_novels = get_user_novels(st.session_state.user_email)
     
-    if not novels:
+    if not cover_novels:
         st.info("登録済み小説がありません")
         return
     
     selected_novel = st.selectbox(
         "小説を選択",
-        novels,
+        cover_novels,
         format_func=lambda x: x['title']
     )
     
@@ -519,6 +524,96 @@ def update_check_page():
             st.rerun()
         else:
             st.error("表紙の更新に失敗しました")
+
+    if updated_count > 0:
+        st.divider()
+
+        if st.button("📥 更新のある作品をすべてダウンロード"):
+            try:
+                with st.spinner("更新作品をまとめてダウンロード中..."):
+                    temp_dir = tempfile.mkdtemp()
+                    combined_zip_path = os.path.join(
+                        temp_dir,
+                        f"updated_novels_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip"
+                    )
+
+                    updated_novels = []
+
+                    for novel in novels:
+                        current_chapters = get_latest_chapter_count(novel["url"])
+                        if current_chapters > novel["latest_chapter"]:
+                            updated_novels.append((novel, current_chapters))
+
+                    with zipfile.ZipFile(
+                        combined_zip_path,
+                        "w",
+                        zipfile.ZIP_DEFLATED
+                    ) as combined_zip:
+
+                        for idx, (novel, current_chapters) in enumerate(updated_novels):
+                            status_text.text(
+                                f"ダウンロード中: {novel['title']} "
+                                f"({idx+1}/{len(updated_novels)})"
+                            )
+
+                            cover_path = None
+                            if novel.get("cover_image"):
+                                cover_bytes = base64.b64decode(novel["cover_image"])
+                                tmp_cover = tempfile.NamedTemporaryFile(
+                                    delete=False,
+                                    suffix=".jpg"
+                                )
+                                tmp_cover.write(cover_bytes)
+                                tmp_cover.close()
+                                cover_path = tmp_cover.name
+
+                            output_folder = create_epub(
+                                novel["url"],
+                                cover_path=cover_path,
+                                progress_callback=progress,
+                                log_callback=log
+                            )
+
+                            epub_files = [
+                                f for f in os.listdir(output_folder)
+                                if f.endswith(".epub")
+                            ]
+
+                            for epub_file in epub_files:
+                                epub_path = os.path.join(output_folder, epub_file)
+                                combined_zip.write(
+                                    epub_path,
+                                    arcname=epub_file
+                                )
+
+                    with open(combined_zip_path, "rb") as f:
+                        downloaded = st.download_button(
+                            label="📥 updated_novels.zip をダウンロード",
+                            data=f,
+                            file_name=os.path.basename(combined_zip_path),
+                            mime="application/zip"
+                        )
+
+                    if downloaded:
+                        for novel, current_chapters in updated_novels:
+                            record_download(
+                                st.session_state.user_email,
+                                novel["id"],
+                                current_chapters,
+                                combined_zip_path
+                            )
+                            update_latest_chapter(
+                                novel["id"],
+                                current_chapters
+                            )
+
+                        st.success(
+                            f"{len(updated_novels)}作品をまとめてダウンロードしました。"
+                        )
+                        st.rerun()
+
+            except Exception as e:
+                st.error(f"一括ダウンロード中にエラーが発生しました: {e}")
 
 
 # ページ表示
