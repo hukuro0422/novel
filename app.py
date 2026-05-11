@@ -196,8 +196,8 @@ def dashboard_page():
             st.write(f"**{novel['title']}**")
             st.caption(f"URL: {novel['url']}")
             # 毎回最新の全話数を取得して表示
-            current_total = get_latest_chapter_count(novel['url'])
-            st.caption(f"全話数: {current_total} 話")
+            #current_total = get_latest_chapter_count(novel['url'])
+            #st.caption(f"全話数: {current_total} 話")
             if novel['registered_at']:
                 st.caption(f"登録日: {novel['registered_at'][:10]}")
         
