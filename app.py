@@ -145,11 +145,19 @@ def dashboard_page():
     st.write(f"ログイン中: {st.session_state.user_email}")
     
     if st.button("ログアウト"):
+        # セッションをクリア
         st.session_state.user_email = None
         st.session_state.current_page = "login"
-        if "user_email" in cookies:
-            del cookies["user_email"]
+
+        # Cookie を確実に削除
+        cookies["user_email"] = ""
         cookies.save()
+
+        # 選択中の小説も削除
+        if "selected_novel" in st.session_state:
+            del st.session_state["selected_novel"]
+
+        st.success("ログアウトしました")
         st.rerun()
     
     col1, col2, col3 = st.columns(3)
