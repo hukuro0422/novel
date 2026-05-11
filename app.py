@@ -453,18 +453,18 @@ def update_check_page():
             current_chapters = get_latest_chapter_count(novel['url'])
 
             if current_chapters > novel['latest_chapter']:
-                # 更新あり
                 st.success(
-                    f"📈 **{novel['title']}**: 保存中の話数 {novel['latest_chapter']}話 → 現在の全話数 {current_chapters}話 "
+                    f"📈 **{novel['title']}**: 保存中の話数 {novel['latest_chapter']}話 "
+                    f"→ 現在の全話数 {current_chapters}話 "
                     f"(+{current_chapters - novel['latest_chapter']}話)"
                 )
-
-                # データベースを更新
-                update_latest_chapter(novel['id'], current_chapters)
                 updated_count += 1
             else:
-                # 更新なし
-                st.info(f"✅ **{novel['title']}**: 更新なし (現在の全話数 {novel['latest_chapter']}話)")
+                st.info(
+                    f"✅ **{novel['title']}**: 更新なし "
+                    f"(現在の全話数 {novel['latest_chapter']}話)"
+                )
+
 
         except Exception as e:
             st.error(f"❌ **{novel['title']}**: チェック失敗 - {str(e)}")
