@@ -176,6 +176,7 @@ def create_epub(
     cover_path=None,
     progress_callback=None,
     log_callback=None
+    start_episode=1
 ):
     session = create_session()
 
