@@ -72,6 +72,7 @@ def create_session():
 
 def get_soup(session, url, log_callback=None):
     try:
+        time.sleep(1.0)  # アクセス間隔を空ける
         res = session.get(url, timeout=15)
 
         if res.status_code == 404:
@@ -383,7 +384,7 @@ def create_epub(
                             item["title"]
                         )
 
-            time.sleep(0.5)
+            time.sleep(0.1)
 
         curr_chapter = work_title
 
@@ -540,7 +541,7 @@ def create_epub(
                     next_link["href"]
                 )
 
-                time.sleep(0.2)
+                time.sleep(0.5)
 
             else:
                 current_idx = None
