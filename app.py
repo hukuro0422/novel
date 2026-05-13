@@ -354,55 +354,82 @@ def download_page():
     if "selected_novel" not in st.session_state:
         st.error("エラー：小説が選択されていません")
         return
-    
+
     novel = st.session_state.selected_novel
     st.title(f"📥 {novel['title']} をダウンロード")
-    
+
     if st.button("← ダッシュボードに戻る"):
         st.session_state.current_page = "dashboard"
         st.rerun()
-    
+
     st.divider()
-    
+
     # 表紙画像を表示
     if novel.get('cover_image'):
         st.subheader("表紙")
         cover_bytes = base64.b64decode(novel['cover_image'])
         st.image(cover_bytes, width=200)
-    
-    st.write(f"**URL:** {novel['url']}")
-    # 最新の全話数を取得して表示
-    current_total = get_latest_chapter_count(novel['url'])
 
-    # 表示
+    st.write(f"**URL:** {novel['url']}")
+
+    # 現在の全話数を取得
+    current_total = get_latest_chapter_count(novel['url'])
     st.write(f"**全話数:** {current_total} 話")
 
-    # DBの値が古ければ更新
-    if current_total != novel['latest_chapter']:
-        update_latest_chapter(novel['id'], current_total)
-        novel['latest_chapter'] = current_total
-    
-    if st.button("📖 ダウンロード開始"):
+    # 前回保存時の話数
+    saved_total = novel.get('latest_chapter', 0)
+
+    # 更新がある場合のみメッセージ表示
+    if current_total > saved_total:
+        added = current_total - saved_total
+        st.success(f"📈 {added}話の更新があります")
+    else:
+        st.info("最新の状態です")
+
+    # ダウンロード方法の選択
+    download_mode = st.radio(
+        "ダウンロード方法",
+        ["更新分のみ", "全話"],
+        horizontal=True
+    )
+
+    # 「更新分のみ」を選んだときに更新がなければボタンを無効化
+    no_update = current_total <= saved_total
+    disable_download = (
+        download_mode == "更新分のみ" and no_update
+    )
+
+    if disable_download:
+        st.warning("更新がないため「更新分のみ」はダウンロードできません。")
+
+    if st.button(
+        "📖 ダウンロード開始",
+        disabled=disable_download
+    ):
         try:
             with st.spinner("EPUB生成中..."):
                 st.session_state.progress_bar = st.progress(0)
                 st.session_state.log_area = st.empty()
-                
-                # 表紙画像をファイルに保存
+
+                # 表紙画像を一時保存
                 cover_path = None
                 if novel.get('cover_image'):
                     cover_bytes = base64.b64decode(novel['cover_image'])
-                    tmp = tempfile.NamedTemporaryFile(delete=False, suffix='.jpg')
+                    tmp = tempfile.NamedTemporaryFile(
+                        delete=False,
+                        suffix='.jpg'
+                    )
                     tmp.write(cover_bytes)
+                    tmp.close()
                     cover_path = tmp.name
-                
-                download_mode = st.session_state.get("download_mode", "全話")
 
+                # ダウンロード開始話数を決定
                 if download_mode == "更新分のみ":
-                    start_episode = novel['latest_chapter'] + 1
+                    start_episode = saved_total + 1
                 else:
                     start_episode = 1
-                
+
+                # EPUB生成
                 output_folder = create_epub(
                     novel['url'],
                     cover_path=cover_path,
@@ -410,45 +437,81 @@ def download_page():
                     log_callback=log,
                     start_episode=start_episode
                 )
-            
+
             work_title = os.path.basename(output_folder)
-            epub_files = [f for f in os.listdir(output_folder) if f.endswith(".epub")]
-            
-            # 実際の全話数を取得して保存
-            actual_total = get_latest_chapter_count(novel['url'])
-            old_chapter_count = novel.get('latest_chapter', 0)
-            st.write(f"デバッグ: URL={novel['url']}, actual_total={actual_total}, old={old_chapter_count}")  # デバッグ用
-            
-            update_latest_chapter(novel['id'], actual_total)
-            
-            # ZIPファイルを作成
-            zip_path = os.path.join(output_folder, f"{work_title}.zip")
-            with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zipf:
+
+            epub_files = [
+                f for f in os.listdir(output_folder)
+                if f.endswith(".epub")
+            ]
+
+            if not epub_files:
+                st.error("EPUBファイルが生成されませんでした。")
+                return
+
+            # ZIP作成
+            zip_path = os.path.join(
+                output_folder,
+                f"{work_title}.zip"
+            )
+
+            with zipfile.ZipFile(
+                zip_path,
+                "w",
+                zipfile.ZIP_DEFLATED
+            ) as zipf:
                 for epub_file in epub_files:
-                    full_path = os.path.join(output_folder, epub_file)
-                    zipf.write(full_path, arcname=epub_file)
-            
+                    full_path = os.path.join(
+                        output_folder,
+                        epub_file
+                    )
+                    zipf.write(
+                        full_path,
+                        arcname=epub_file
+                    )
+
+            # ダウンロードボタン
             with open(zip_path, "rb") as f:
-                st.download_button(
+                downloaded = st.download_button(
                     label="📥 ZIPをダウンロード",
                     data=f,
                     file_name=f"{work_title}.zip",
                     mime="application/zip"
                 )
-            
-            # ダウンロード履歴を記録
-            record_download(
-                st.session_state.user_email,
-                novel['id'],
-                actual_total,
-                zip_path
-            )
-            
-            if actual_total > old_chapter_count:
-                st.success(f"✅ {actual_total - old_chapter_count}話新しい話が追加されていました！")
-            else:
-                st.info("新しい話はまだアップロードされていません")
-            
+
+            # 実際にダウンロードされた場合のみDB更新
+            if downloaded:
+                # 最新話数を再取得
+                actual_total = get_latest_chapter_count(
+                    novel['url']
+                )
+
+                # ダウンロード履歴記録
+                record_download(
+                    st.session_state.user_email,
+                    novel['id'],
+                    actual_total,
+                    zip_path
+                )
+
+                # 最新話数を更新
+                update_latest_chapter(
+                    novel['id'],
+                    actual_total
+                )
+
+                # セッション上の値も更新
+                novel['latest_chapter'] = actual_total
+
+                if actual_total > saved_total:
+                    st.success(
+                        f"✅ {actual_total - saved_total}話分をダウンロードしました！"
+                    )
+                else:
+                    st.success("✅ ダウンロードが完了しました。")
+
+                st.rerun()
+
         except Exception as e:
             st.error(f"エラー: {str(e)}")
 
