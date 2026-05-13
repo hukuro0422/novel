@@ -507,14 +507,12 @@ def update_check_page():
                     st.session_state.download_mode = download_mode
                     st.session_state.current_page = "download"
                     st.rerun()
-                    
-                    
-                
-                else:
-                    st.info(
-                        f"✅ **{novel['title']}**: 更新なし "
-                        f"(現在の全話数 {novel['latest_chapter']}話)"
-                    )
+            
+            else:
+                st.info(
+                    f"✅ **{novel['title']}**: 更新なし "
+                    f"({current_chapters}話)"
+                )
 
 
         except Exception as e:
