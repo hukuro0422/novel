@@ -377,11 +377,19 @@ def download_page():
                     tmp.write(cover_bytes)
                     cover_path = tmp.name
                 
+                download_mode = st.session_state.get("download_mode", "全話")
+
+                if download_mode == "更新分のみ":
+                    start_episode = novel['latest_chapter'] + 1
+                else:
+                    start_episode = 1
+                
                 output_folder = create_epub(
                     novel['url'],
                     cover_path=cover_path,
                     progress_callback=progress,
-                    log_callback=log
+                    log_callback=log,
+                    start_episode=start_episode
                 )
             
             work_title = os.path.basename(output_folder)
