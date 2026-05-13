@@ -539,7 +539,9 @@ def create_epub(
 
         ep_content_map = {}
 
-        for i, item in enumerate(ep_list, 1):
+        filtered_ep_list = ep_list[start_episode - 1:]
+
+        for i, item in enumerate(filtered_ep_list, 1):
 
             parsed = urlparse(top_url)
 
