@@ -480,41 +480,41 @@ def update_check_page():
             current_chapters = get_latest_chapter_count(novel['url'])
             
             if current_chapters > novel['latest_chapter']:
-            added = current_chapters - novel['latest_chapter']
-        
-            st.success(
-                f"📈 **{novel['title']}**: "
-                f"{novel['latest_chapter']}話 → {current_chapters}話 "
-                f"(+{added}話)"
-            )
-        
-            updated_count += 1
-        
-            # ダウンロード方法選択
-            download_mode = st.radio(
-                "ダウンロード方法",
-                ["更新分のみ", "全話"],
-                key=f"mode_{novel['id']}",
-                horizontal=True
-            )
-        
-            # 個別ダウンロードボタン
-            if st.button(
-                "📥 この作品をダウンロード",
-                key=f"download_update_{novel['id']}"
-            ):
-                st.session_state.selected_novel = novel
-                st.session_state.download_mode = download_mode
-                st.session_state.current_page = "download"
-                st.rerun()
-                
-                
+                added = current_chapters - novel['latest_chapter']
             
-            else:
-                st.info(
-                    f"✅ **{novel['title']}**: 更新なし "
-                    f"(現在の全話数 {novel['latest_chapter']}話)"
+                st.success(
+                    f"📈 **{novel['title']}**: "
+                    f"{novel['latest_chapter']}話 → {current_chapters}話 "
+                    f"(+{added}話)"
                 )
+            
+                updated_count += 1
+            
+                # ダウンロード方法選択
+                download_mode = st.radio(
+                    "ダウンロード方法",
+                    ["更新分のみ", "全話"],
+                    key=f"mode_{novel['id']}",
+                    horizontal=True
+                )
+            
+                # 個別ダウンロードボタン
+                if st.button(
+                    "📥 この作品をダウンロード",
+                    key=f"download_update_{novel['id']}"
+                ):
+                    st.session_state.selected_novel = novel
+                    st.session_state.download_mode = download_mode
+                    st.session_state.current_page = "download"
+                    st.rerun()
+                    
+                    
+                
+                else:
+                    st.info(
+                        f"✅ **{novel['title']}**: 更新なし "
+                        f"(現在の全話数 {novel['latest_chapter']}話)"
+                    )
 
 
         except Exception as e:
