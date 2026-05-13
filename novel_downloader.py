@@ -532,6 +532,13 @@ def create_epub(
             else:
                 current_idx = None
 
+                # 作品ページを取得できなかった場合
+        if not work_title:
+            raise Exception(
+                "作品ページを取得できませんでした。"
+                "小説家になろう側でアクセスが拒否されました（403 Forbidden）。"
+            )
+
         ep_list = [
             s for s in structure
             if s["type"] == "episode"
