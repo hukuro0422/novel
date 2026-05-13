@@ -383,7 +383,7 @@ def create_epub(
                             item["title"]
                         )
 
-            time.sleep(0.1)
+            time.sleep(0.5)
 
         curr_chapter = work_title
 
