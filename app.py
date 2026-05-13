@@ -91,57 +91,74 @@ def progress(i, percent, title):
 def login_page():
     """ログイン・登録ページ"""
     st.title("📚 Novel Downloader")
-    
-    col1, col2 = st.columns(2)
+
+    # Cookie の確認（デバッグ用）
     st.write("Saved cookie:", cookies.get("user_email"))
-    
-    with col1:
-        st.subheader("新規登録")
-        email_new = st.text_input("メールアドレス（新規）", key="email_new")
-        if st.button("登録"):
-            if email_new:
-                success, msg = register_user(email_new)
-                if success:
-                    st.success(msg)
 
-                    # Cookie に保存（rerun の前に実行する）
-                    cookies["user_email"] = email_new
-                    cookies.save()
+    # ===== ログインを上に配置 =====
+    st.subheader("ログイン")
 
-                    # セッションに保存
-                    st.session_state.user_email = email_new
-                    st.session_state.current_page = "dashboard"
+    # form を使うと Enter / キーボードの「決定」で送信できる
+    with st.form("login_form"):
+        email_login = st.text_input(
+            "メールアドレス",
+            key="email_login"
+        )
+        login_submitted = st.form_submit_button("ログイン")
 
-                    # 画面更新
-                    st.rerun()
-                else:
-                    st.error(msg)
+    if login_submitted:
+        if email_login:
+            user = get_user_by_email(email_login)
+
+            if user:
+                st.success("ログインしました")
+
+                # Cookie に保存
+                cookies["user_email"] = email_login
+                cookies.save()
+
+                # セッションに保存
+                st.session_state.user_email = email_login
+                st.session_state.current_page = "dashboard"
+
+                st.rerun()
             else:
-                st.error("メールアドレスを入力してください")
-    
-    with col2:
-        st.subheader("ログイン")
-        email_login = st.text_input("メールアドレス", key="email_login")
-        if st.button("ログイン"):
-            if email_login:
-                user = get_user_by_email(email_login)
-                if user:
-                    st.success("ログインしました")
+                st.error("このメールアドレスは登録されていません")
+        else:
+            st.error("メールアドレスを入力してください")
 
-                    # Cookie に保存（rerun の前に実行する）
-                    cookies["user_email"] = email_login
-                    cookies.save()
+    st.divider()
 
-                    # セッションに保存
-                    st.session_state.user_email = email_login
-                    st.session_state.current_page = "dashboard"
+    # ===== 新規登録を下に配置 =====
+    st.subheader("新規登録")
 
-                    # 画面更新
-                    st.rerun()
-                else:
-                    st.error("このメールアドレスは登録されていません")
+    with st.form("register_form"):
+        email_new = st.text_input(
+            "メールアドレス（新規）",
+            key="email_new"
+        )
+        register_submitted = st.form_submit_button("登録")
+
+    if register_submitted:
+        if email_new:
+            success, msg = register_user(email_new)
+
+            if success:
+                st.success(msg)
+
+                # Cookie に保存
+                cookies["user_email"] = email_new
+                cookies.save()
+
+                # セッションに保存
+                st.session_state.user_email = email_new
+                st.session_state.current_page = "dashboard"
+
+                st.rerun()
             else:
-                st.error("メールアドレスを入力してください")
+                st.error(msg)
+        else:
+            st.error("メールアドレスを入力してください")
 
 
 def dashboard_page():
