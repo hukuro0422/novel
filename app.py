@@ -323,7 +323,7 @@ def add_novel_page():
                     with open(zip_path, "rb") as f:
                         downloaded = st.download_button(
                             label="📥 ZIPをダウンロード",
-                            data=f,
+                            data=f.read(),
                             file_name=f"{work_title}.zip",
                             mime="application/zip"
                         )
@@ -470,47 +470,42 @@ def download_page():
                         arcname=epub_file
                     )
 
-            # ダウンロードボタン
+            
+            # ZIP作成後すぐにDB更新
+            actual_total = get_latest_chapter_count(novel['url'])
+
+            record_download(
+                st.session_state.user_email,
+                novel['id'],
+                actual_total,
+                zip_path
+            )
+
+            update_latest_chapter(
+                novel['id'],
+                actual_total
+            )
+
+            # セッション上の値も更新
+            novel['latest_chapter'] = actual_total
+
+            # ダウンロードボタンを表示
             with open(zip_path, "rb") as f:
-                downloaded = st.download_button(
+                st.download_button(
                     label="📥 ZIPをダウンロード",
-                    data=f,
+                    data=f.read(),
                     file_name=f"{work_title}.zip",
                     mime="application/zip"
                 )
 
-            # 実際にダウンロードされた場合のみDB更新
-            if downloaded:
-                # 最新話数を再取得
-                actual_total = get_latest_chapter_count(
-                    novel['url']
+            # 成功メッセージ
+            if actual_total > saved_total:
+                st.success(
+                    f"✅ {actual_total - saved_total}話分を保存しました。"
                 )
+            else:
+                st.success("✅ ダウンロード準備が完了しました。")
 
-                # ダウンロード履歴記録
-                record_download(
-                    st.session_state.user_email,
-                    novel['id'],
-                    actual_total,
-                    zip_path
-                )
-
-                # 最新話数を更新
-                update_latest_chapter(
-                    novel['id'],
-                    actual_total
-                )
-
-                # セッション上の値も更新
-                novel['latest_chapter'] = actual_total
-
-                if actual_total > saved_total:
-                    st.success(
-                        f"✅ {actual_total - saved_total}話分をダウンロードしました！"
-                    )
-                else:
-                    st.success("✅ ダウンロードが完了しました。")
-
-                st.rerun()
 
         except Exception as e:
             st.error(f"エラー: {str(e)}")
@@ -531,11 +526,22 @@ def update_check_page():
     """全て更新チェックページ"""
     st.title("🔄 全て更新チェック")
 
+    if "update_check_done" not in st.session_state:
+        st.session_state.update_check_done = False
+
     if st.button("← ダッシュボードに戻る"):
+        st.session_state.update_check_done = False
         st.session_state.current_page = "dashboard"
         st.rerun()
 
     st.divider()
+
+    if not st.session_state.update_check_done:
+        if st.button("🔍 更新チェック開始"):
+            st.session_state.update_check_done = True
+            st.rerun()
+        return
+
 
     # 登録済み小説を取得
     novels = get_user_novels(st.session_state.user_email)
@@ -715,7 +721,7 @@ def update_check_page():
                     with open(combined_zip_path, "rb") as f:
                         downloaded = st.download_button(
                             label="📥 updated_novels.zip をダウンロード",
-                            data=f,
+                            data=f.read(),
                             file_name=os.path.basename(combined_zip_path),
                             mime="application/zip"
                         )
