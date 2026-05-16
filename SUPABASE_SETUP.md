@@ -1,7 +1,7 @@
 # Supabase セットアップガイド
 
 git add .
-git commit -m "Fix chapter count over 100"
+git commit -m "FIX"
 git push origin main
 
 ## 1. Supabase でプロジェクトを作成

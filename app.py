@@ -23,6 +23,23 @@ import streamlit as st
 from streamlit_cookies_manager import EncryptedCookieManager
 import warnings
 
+# =========================
+# キャッシュ関数
+# =========================
+@st.cache_data(ttl=300)
+def cached_get_user_by_email(email):
+    return get_user_by_email(email)
+
+
+@st.cache_data(ttl=60)
+def cached_get_user_novels(email):
+    return get_user_novels(email)
+
+
+@st.cache_data(ttl=600)
+def cached_get_latest_chapter_count(url):
+    return get_latest_chapter_count(url)
+
 warnings.filterwarnings(
     "ignore",
     message="st.cache is deprecated"
@@ -36,14 +53,15 @@ st.set_page_config(
 )
 
 # Cookie管理
+try:
+    cookie_password = st.secrets["COOKIE_PASSWORD"]
+except Exception:
+    cookie_password = "novel-downloader-local-fallback-key-2026"
+
 cookies = EncryptedCookieManager(
     prefix="novel_downloader/",
-    password=st.secrets.get(
-        "COOKIE_PASSWORD",
-        "novel-downloader-local-fallback-key-2026"
-    )
+    password=cookie_password
 )
-
 
 # Cookie の準備が完了するまで待つ
 if not cookies.ready():
@@ -66,7 +84,7 @@ if "current_page" not in st.session_state:
 if st.session_state.user_email is None:
     saved_email = cookies.get("user_email")
     if saved_email:
-        user = get_user_by_email(saved_email)
+        user = cached_get_user_by_email(saved_email)
         if user:
             st.session_state.user_email = saved_email
             st.session_state.current_page = "dashboard"
@@ -108,7 +126,7 @@ def login_page():
 
     if login_submitted:
         if email_login:
-            user = get_user_by_email(email_login)
+            user = cached_get_user_by_email(email_login)
 
             if user:
                 st.success("ログインしました")
@@ -145,6 +163,9 @@ def login_page():
 
             if success:
                 st.success(msg)
+
+                cached_get_user_novels.clear()
+                cached_get_latest_chapter_count.clear()
 
                 # Cookie に保存
                 cookies["user_email"] = email_new
@@ -200,7 +221,7 @@ def dashboard_page():
     
     # 登録済み小説一覧
     st.subheader("登録済み小説")
-    novels = get_user_novels(st.session_state.user_email)
+    novels = cached_get_user_novels(st.session_state.user_email)
     
     if not novels:
         st.info("登録済み小説がありません")
@@ -213,7 +234,7 @@ def dashboard_page():
             st.write(f"**{novel['title']}**")
             st.caption(f"URL: {novel['url']}")
             # 毎回最新の全話数を取得して表示
-            #current_total = get_latest_chapter_count(novel['url'])
+            #current_total = cached_get_latest_chapter_count(novel['url'])
             #st.caption(f"全話数: {current_total} 話")
             if novel.get('last_downloaded_at'):
                 st.caption(f"更新日: {novel['last_downloaded_at'][:10]}")
@@ -233,6 +254,9 @@ def dashboard_page():
 
                     if success:
                         st.success(f"「{novel['title']}」を削除しました。")
+
+                        cached_get_user_novels.clear()
+                        cached_get_latest_chapter_count.clear()
 
                         # ダウンロード画面で選択中だった場合は解除
                         if (
@@ -308,10 +332,14 @@ def add_novel_page():
                 
                 if success:
                     epub_files = [f for f in os.listdir(output_folder) if f.endswith(".epub")]
-                    actual_total = get_latest_chapter_count(url)
+                    cached_get_latest_chapter_count.clear()
+                    actual_total = cached_get_latest_chapter_count(url)
                     update_latest_chapter(novel_id, actual_total)
+
+                    cached_get_user_novels.clear()
                     
                     st.success("小説を登録しました！")
+
                     
                     # ZIPダウンロード
                     zip_path = os.path.join(output_folder, f"{work_title}.zip")
@@ -373,7 +401,7 @@ def download_page():
     st.write(f"**URL:** {novel['url']}")
 
     # 現在の全話数を取得
-    current_total = get_latest_chapter_count(novel['url'])
+    current_total = cached_get_latest_chapter_count(novel['url'])
     st.write(f"**全話数:** {current_total} 話")
 
     # 前回保存時の話数
@@ -472,7 +500,8 @@ def download_page():
 
             
             # ZIP作成後すぐにDB更新
-            actual_total = get_latest_chapter_count(novel['url'])
+            cached_get_latest_chapter_count.clear()
+            actual_total = cached_get_latest_chapter_count(novel['url'])
 
             record_download(
                 st.session_state.user_email,
@@ -538,13 +567,14 @@ def update_check_page():
 
     if not st.session_state.update_check_done:
         if st.button("🔍 更新チェック開始"):
+            cached_get_latest_chapter_count.clear()
             st.session_state.update_check_done = True
             st.rerun()
         return
 
 
     # 登録済み小説を取得
-    novels = get_user_novels(st.session_state.user_email)
+    novels = cached_get_user_novels(st.session_state.user_email)
 
     if not novels:
         st.info("登録済み小説がありません")
@@ -565,7 +595,7 @@ def update_check_page():
         try:
             # 最新章数を取得
             from novel_downloader import get_latest_chapter_count
-            current_chapters = get_latest_chapter_count(novel['url'])
+            current_chapters = cached_get_latest_chapter_count(novel['url'])
             
             if current_chapters > novel['latest_chapter']:
                 added = current_chapters - novel['latest_chapter']
@@ -622,7 +652,7 @@ def update_check_page():
     
     st.subheader("表紙画像の管理")
     
-    cover_novels = get_user_novels(st.session_state.user_email)
+    cover_novels = cached_get_user_novels(st.session_state.user_email)
     
     if not cover_novels:
         st.info("登録済み小説がありません")
@@ -652,6 +682,7 @@ def update_check_page():
     
     if new_cover and st.button("表紙を更新"):
         if update_cover_image(selected_novel['id'], new_cover):
+            cached_get_user_novels.clear()
             st.success("表紙を更新しました！")
             st.rerun()
         else:
@@ -672,7 +703,7 @@ def update_check_page():
                     updated_novels = []
 
                     for novel in novels:
-                        current_chapters = get_latest_chapter_count(novel["url"])
+                        current_chapters = cached_get_latest_chapter_count(novel["url"])
                         if current_chapters > novel["latest_chapter"]:
                             updated_novels.append((novel, current_chapters))
 
