@@ -1,7 +1,7 @@
 # Supabase セットアップガイド
 
 git add .
-git commit -m "FIX"
+git commit -m "update"
 git push origin main
 
 ## 1. Supabase でプロジェクトを作成

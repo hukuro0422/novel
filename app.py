@@ -323,6 +323,22 @@ def add_novel_page():
         if not url.strip():
             st.error("URLを入力してください")
         else:
+            # 初めに登録済みかどうかを判断
+            existing_novels = cached_get_user_novels(st.session_state/user_email)
+            is_already_registered = False
+            existing_novel_id = None
+
+            if existing_novels:
+                for n in existing_novels:
+                    if n['url'] == url.strip():
+                        is_already_registered = True
+                        existing_novel_id = n['id']
+                        break
+
+            # すでに登録済みの場合は知らせる
+            if is_already_registered:
+                st.warning("この小説は登録されています。")
+
             cover_path = None
             cover_bytes = None
             if cover:
@@ -336,7 +352,7 @@ def add_novel_page():
             
             
             try:
-                with st.spinner("EPUB生成中..."):
+                with st.spinner("ダウンロード中..."):
                     st.session_state.progress_bar = st.progress(0)
                     st.session_state.log_area = st.empty()
                     
@@ -348,16 +364,36 @@ def add_novel_page():
                     )
                 
                 work_title = os.path.basename(output_folder)
-                
-                # 小説を登録
-                success, msg, novel_id = register_novel(
-                    st.session_state.user_email,
-                    url,
-                    work_title,
-                    cover_bytes
-                )
-                
-                if success:
+                st.info(f"『{work_title}』ダウンロード中... ")
+
+                novel_id = existing_novel_id
+                registration_success = True
+
+                # 未登録の場合はデータベースに登録する
+                if not is_already_registered:
+                    # 小説を登録
+                    success, msg, new_id = register_novel(
+                        st.session_state.user_email,
+                        url,
+                        work_title,
+                        cover_bytes
+                    )
+                    if success:
+                        novel_id = new_id
+                    else:
+                        st.error(msg)
+                        registration_success = False
+
+                # すでに登録されている場合
+                else:
+                    # もし新しい表紙画像が選択されていたら、データベース側も更新する
+                    if cover_bytes is not None:
+                        if update_cover_image(novel_id, cover_bytes):
+                            st.info("🔄 登録済みの表紙画像を最新のものに更新しました。")
+                        else:
+                            st.error("❌ 表紙画像の更新に失敗しました。")
+
+                if registration_success and novel_id is not None:
                     epub_files = [f for f in os.listdir(output_folder) if f.endswith(".epub")]
                     cached_get_latest_chapter_count.clear()
                     actual_total = cached_get_latest_chapter_count(url)
@@ -365,7 +401,11 @@ def add_novel_page():
 
                     cached_get_user_novels.clear()
                     
-                    st.success("小説を登録しました！")
+                    if not is_already_registered:
+                        st.success("小説を登録しました！")
+                    else:
+                        st.success("最新の状態に更新しました！")
+
                     # register_novel の成功・失敗に関わらず、最後に一時ファイルを削除する
                     if cover_path and os.path.exists(cover_path):
                         os.unlink(cover_path)
@@ -406,6 +446,8 @@ def add_novel_page():
                 
             except Exception as e:
                 st.error(f"エラー: {str(e)}")
+                if cover_path and os.path.exists(cover_path):
+                    os.unlink(cover_path)
 
 
 def download_page():
