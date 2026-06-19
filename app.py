@@ -489,6 +489,7 @@ def update_check_page():
                     st.session_state.checked_latest_total = current_chapters
                     st.session_state.current_page = "download_and_manage"
                     st.rerun()
+                    break
             else:
                 st.info(f"✅ **{novel['title']}**: 更新なし ({current_chapters}話)")
         except Exception as e:
