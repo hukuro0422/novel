@@ -496,8 +496,6 @@ def update_check_page():
         total_novels = len(novels)
 
         for i, novel in enumerate(novels):
-            if loop_check is True:
-                break
             status_text.text(f"チェック中: {novel['title']} ({i+1}/{total_novels})")
             try:
                 current_chapters = cached_get_latest_chapter_count(novel['url'])
@@ -513,6 +511,7 @@ def update_check_page():
                             "chapters": current_chapters
                         }
                         st.rerun()
+                        break
                 else:
                     st.info(f"✅ **{novel['title']}**: 更新なし ({current_chapters}話)")
             except Exception as e:
