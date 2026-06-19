@@ -81,7 +81,7 @@ def process_cover_image(uploaded_file):
     # Pillowで画像を開いて加工
     img = Image.open(uploaded_file)
     gray_img = img.convert("L")  # グレースケール化
-    resized_img = gray_img.resize((400, 800), Image.Resampling.LANCZOS)  # 横400×縦800
+    resized_img = gray_img.resize((480, 800), Image.Resampling.LANCZOS)  # 横400×縦800
     
     # 一時ファイルに保存して閉じる
     resized_img.save(tmp.name)
