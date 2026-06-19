@@ -179,6 +179,8 @@ def dashboard_page():
     col1, col2, col3 = st.columns(3)
     with col1:
         if st.button("📖 新規小説を追加"):
+            if "checked_latest_total" in st.session_state:
+                del st.session_state['checked_latest_total']
             st.session_state.active_url = ""  # URL入力を空にする
             st.session_state.current_page = "download_and_manage"
             st.rerun()
@@ -212,6 +214,8 @@ def dashboard_page():
         
         with col2:
             if st.button("📥 ダウンロード / 管理", key=f"download_{novel['id']}"):
+                if "checked_latest_total" in st.session_state:
+                    del st.session_state["checked_latest_total"]
                 st.session_state.active_url = novel['url']  # 該当URLを渡す
                 st.session_state.current_page = "download_and_manage"
                 st.rerun()
@@ -309,7 +313,11 @@ def download_and_manage_page():
     with col_dl:
         st.subheader("ダウンロード設定")
         try:
-            current_total = cached_get_latest_chapter_count(url)
+            # ─── 修正：引き継いだ話数があればそれを使い、無ければネットから取得する ───
+            if "checked_latest_total" in st.session_state and st.session_state.active_url == url:
+                current_total = st.session_state.checked_latest_total
+            else:
+                current_total = cached_get_latest_chapter_count(url)
             st.write(f"**Web上の全話数:** {current_total} 話")
         except Exception as e:
             st.error(f"全話数の取得に失敗しました: {e}")
@@ -478,6 +486,7 @@ def update_check_page():
                 
                 if st.button("📥 この作品の管理・DL画面へ", key=f"go_dl_{novel['id']}"):
                     st.session_state.active_url = novel['url']
+                    st.session_state.checked_latest_total = current_chapters
                     st.session_state.current_page = "download_and_manage"
                     st.rerun()
             else:
