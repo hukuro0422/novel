@@ -449,6 +449,7 @@ def update_check_page():
     st.title("🔄 全て更新チェック")
 
     if st.button("← ダッシュボードに戻る"):
+        # ダッシュボードに戻る時は一時保存データを削除して、次回また自動更新が走るようにする
         st.session_state.pop("check_results", None)
         st.session_state.current_page = "dashboard"
         st.rerun()
@@ -459,61 +460,68 @@ def update_check_page():
     if "check_results" not in st.session_state:
         st.session_state.check_results = None
 
-    # 【状態1】まだチェックしていない場合、ボタンを表示
+    # 【自動判別】まだ一時保存データがない場合は、ボタンを押さずに自動でチェックを開始する
     if st.session_state.check_results is None:
-        if st.button("🔍 更新チェック開始"):
-            novels = cached_get_user_novels(st.session_state.user_email)
-            if not novels:
-                st.info("登録済み小説がありません")
-                return
+        novels = cached_get_user_novels(st.session_state.user_email)
+        if not novels:
+            st.info("登録済み小説がありません")
+            return
 
-            st.subheader("更新チェック中...")
-            progress_bar = st.progress(0)
-            status_text = st.empty()
-            total_novels = len(novels)
-            
-            results = []
+        st.subheader("🔄 自動更新チェック中...")
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+        total_novels = len(novels)
+        
+        # 毎回最新を取るためにキャッシュをクリア
+        cached_get_latest_chapter_count.clear()
+        results = []
 
-            # ─── このループは「チェック開始」を押した時の1回しか走りません ───
-            for i, novel in enumerate(novels):
-                status_text.text(f"チェック中: {novel['title']} ({i+1}/{total_novels})")
-                try:
-                    current_chapters = cached_get_latest_chapter_count(novel['url'])
-                    has_update = current_chapters > novel['latest_chapter']
-                    added = current_chapters - novel['latest_chapter'] if has_update else 0
-                    
-                    results.append({
-                        "id": novel["id"],
-                        "title": novel["title"],
-                        "url": novel["url"],
-                        "saved_chapters": novel["latest_chapter"],
-                        "current_chapters": current_chapters,
-                        "has_update": has_update,
-                        "added": added,
-                        "error": None
-                    })
-                except Exception as e:
-                    results.append({
-                        "id": novel["id"],
-                        "title": novel["title"],
-                        "url": novel["url"],
-                        "error": str(e)
-                    })
+        # 自動でループ処理が走ります
+        for i, novel in enumerate(novels):
+            status_text.text(f"チェック中: {novel['title']} ({i+1}/{total_novels})")
+            try:
+                current_chapters = cached_get_latest_chapter_count(novel['url'])
+                has_update = current_chapters > novel['latest_chapter']
+                added = current_chapters - novel['latest_chapter'] if has_update else 0
+                
+                results.append({
+                    "id": novel["id"],
+                    "title": novel["title"],
+                    "url": novel["url"],
+                    "saved_chapters": novel["latest_chapter"],
+                    "current_chapters": current_chapters,
+                    "has_update": has_update,
+                    "added": added,
+                    "error": None
+                })
+            except Exception as e:
+                results.append({
+                    "id": novel["id"],
+                    "title": novel["title"],
+                    "url": novel["url"],
+                    "error": str(e)
+                })
 
-                progress_bar.progress((i + 1) / total_novels)
-                time.sleep(1)
+            progress_bar.progress((i + 1) / total_novels)
+            time.sleep(1)
 
-            progress_bar.empty()
-            status_text.empty()
-            
-            # 結果をセッションに保存して画面をリロード
-            st.session_state.check_results = results
-            st.rerun()
-        return
+        progress_bar.empty()
+        status_text.empty()
+        
+        # 結果をセッションに保存して画面をリロード（これで下の【状態2】に移る）
+        st.session_state.check_results = results
+        st.rerun()
 
-    # 【状態2】すでにチェックが終わっている場合、結果を並べるだけ（高速）
+    # 【状態2】すでにチェックが終わっている（情報がある）場合は、ループを通らずデータを使うだけ
     st.subheader("更新チェック結果")
     
+    # 手動で再チェックしたい時のためのボタンも一応配置
+    if st.button("🔄 再度チェックする"):
+        st.session_state.check_results = None
+        st.rerun()
+        
+    st.write("") # スペース用
+
     for res in st.session_state.check_results:
         if res.get("error"):
             st.error(f"❌ **{res['title']}**: チェック失敗 - {res['error']}")
@@ -521,7 +529,6 @@ def update_check_page():
             if res["has_update"]:
                 st.success(f"📈 **{res['title']}**: {res['saved_chapters']}話 → {res['current_chapters']}話 (+{res['added']}話)")
                 
-                # ここでボタンを押しても、手前の小説の time.sleep は絶対に走りません
                 if st.button("📥 この作品の管理・DL画面へ", key=f"go_dl_{res['id']}"):
                     st.session_state.active_url = res["url"]
                     st.session_state.checked_latest_total = res["current_chapters"]
