@@ -448,19 +448,25 @@ def settings_page():
 def update_check_page():
     st.title("🔄 全て更新チェック")
     
-    # ─── 【超重要】ボタン押下後の再実行時に、手前のループを完全にバイパス（スキップ）するガード ───
+    # ─── 【修正】余計なエラーを起こさない、最もクリーンな即時ワープ処理 ───
     if "redirect_target" in st.session_state:
         target = st.session_state.redirect_target
-        # セッションに必要なデータを移し替える
+        # 次の画面に必要なデータだけをセットする
         st.session_state.active_url = target["url"]
         st.session_state.checked_latest_total = target["chapters"]
         st.session_state.current_page = "download_and_manage"
-        # 使い終わったガード用変数を削除
-        del st.session_state["redirect_target"]
-        st.session_state.update_check_done = False
+        
+        # ガード用変数の削除や状態リセットは、移動先のページに任せるか、ここで pop してしまう
+        st.session_state.pop("redirect_target", None)
+        st.session_state.pop("update_check_done", None) # エラーの原因になるので消去しておく
+        
         st.rerun()
-        return # ここで関数を完全に終わらせることで、下のループを絶対に踏ませない
+        return # 手前の処理を完全に終わらせて下のループを絶対に踏ませない
     # ─────────────────────────────────────────────────────────────────────────
+
+    # ページ表示に必要な初期値をここで安全にチェック・作成する
+    if "update_check_done" not in st.session_state:
+        st.session_state.update_check_done = False
 
     if st.button("← ダッシュボードに戻る"):
         st.session_state.update_check_done = False
