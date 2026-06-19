@@ -324,7 +324,7 @@ def add_novel_page():
             st.error("URLを入力してください")
         else:
             # 初めに登録済みかどうかを判断
-            existing_novels = cached_get_user_novels(st.session_state/user_email)
+            existing_novels = cached_get_user_novels(st.session_state.user_email)
             is_already_registered = False
             existing_novel_id = None
 
