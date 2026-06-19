@@ -712,12 +712,21 @@ def update_check_page():
     )
     
     if new_cover and st.button("表紙を更新"):
-        if update_cover_image(selected_novel['id'], new_cover):
+    processed_path = process_cover_image(new_cover)
+    if processed_path and os.path.exists(processed_path):
+        with open(processed_path, "rb") as f:  # "Ib" から "rb" に修正
+            processed_bytes = BytesIO(f.read())  # BytesI0 から BytesIO に修正
+            
+        # 加工済みのデータをDBに送る（processed_byte から processed_bytes に修正）
+        if update_cover_image(selected_novel['id'], processed_bytes):
+            os.unlink(processed_path)  # 使い終わった一時ファイルを削除
             cached_get_user_novels.clear()
             st.success("表紙を更新しました！")
             st.rerun()
         else:
+            os.unlink(processed_path)  # 失敗時も一時ファイルを削除
             st.error("表紙の更新に失敗しました")
+
 
     if updated_count > 0:
         st.divider()
