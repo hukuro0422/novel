@@ -306,6 +306,7 @@ def add_novel_page():
                 suffix = os.path.splitext(cover.name)[1]
                 tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
                 tmp.write(cover.read())
+                tmp.close()
                 cover_path = tmp.name
             
             try:
@@ -339,6 +340,10 @@ def add_novel_page():
                     cached_get_user_novels.clear()
                     
                     st.success("小説を登録しました！")
+                    # register_novel の成功・失敗に関わらず、最後に一時ファイルを削除する
+                    if cover_path and os.path.exists(cover_path):
+                        os.unlink(cover_path)
+
 
                     
                     # ZIPダウンロード
