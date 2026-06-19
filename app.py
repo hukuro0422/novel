@@ -22,6 +22,7 @@ from database import (
 import streamlit as st
 from streamlit_cookies_manager import EncryptedCookieManager
 import warnings
+from PIL import Image
 
 # =========================
 # キャッシュ関数
@@ -67,6 +68,27 @@ cookies = EncryptedCookieManager(
 if not cookies.ready():
     st.info("ブラウザ設定を読み込み中です...")
     st.stop()
+
+def process_cover_image(uploaded_file):
+    """アップロードされた画像を400x800のグレースケールに変換し、一時ファイルのパスを返す"""
+    if uploaded_file is None:
+        return None
+        
+    # 一時ファイルの作成
+    suffix = os.path.splitext(uploaded_file.name)[1]
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
+    
+    # Pillowで画像を開いて加工
+    img = Image.open(uploaded_file)
+    gray_img = img.convert("L")  # グレースケール化
+    resized_img = gray_img.resize((400, 800), Image.Resampling.LANCZOS)  # 横400×縦800
+    
+    # 一時ファイルに保存して閉じる
+    resized_img.save(tmp.name)
+    tmp.close()
+    
+    return tmp.name
+
 
 # ===== デバッグ表示（Cookie の状態確認）=====
 with st.expander("🔍 Cookie デバッグ情報"):
@@ -302,12 +324,16 @@ def add_novel_page():
             st.error("URLを入力してください")
         else:
             cover_path = None
+            cover_bytes = None
             if cover:
-                suffix = os.path.splitext(cover.name)[1]
-                tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
-                tmp.write(cover.read())
-                tmp.close()
-                cover_path = tmp.name
+                # 表紙が設定された場合のみ、加工された一時ファイルパスが返る
+                cover_path = process_cover_image(cover)
+                # 加工済みの画像を読み込んでセット
+                if cover_path and os.path.exists(cover_path):
+                    with open(cover_path, "rb") as f:
+                        cover_bytes = BytesIO(f.read())
+            
+            
             
             try:
                 with st.spinner("EPUB生成中..."):
@@ -328,7 +354,7 @@ def add_novel_page():
                     st.session_state.user_email,
                     url,
                     work_title,
-                    cover
+                    cover_bytes
                 )
                 
                 if success:
