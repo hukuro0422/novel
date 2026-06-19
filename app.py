@@ -460,7 +460,6 @@ def update_check_page():
         # ガード用変数の削除や状態リセットは、移動先のページに任せるか、ここで pop してしまう
         st.session_state.pop("redirect_target", None)
         st.session_state.pop("update_check_done", None) # エラーの原因になるので消去しておく
-        loop_check = True
         
         st.rerun()
         return # 手前の処理を完全に終わらせて下のループを絶対に踏ませない
@@ -506,6 +505,7 @@ def update_check_page():
                     
                     # ボタンが押されたら、即座に上の「ガード機能」を起動するための目印をセッションに植え付ける
                     if st.button("📥 この作品の管理・DL画面へ", key=f"go_dl_{novel['id']}"):
+                        loop_check = True
                         st.session_state.redirect_target = {
                             "url": novel["url"],
                             "chapters": current_chapters
