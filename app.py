@@ -447,6 +447,7 @@ def settings_page():
 
 def update_check_page():
     st.title("🔄 全て更新チェック")
+    loop_check = None
     
     # ─── 【修正】余計なエラーを起こさない、最もクリーンな即時ワープ処理 ───
     if "redirect_target" in st.session_state:
@@ -459,64 +460,70 @@ def update_check_page():
         # ガード用変数の削除や状態リセットは、移動先のページに任せるか、ここで pop してしまう
         st.session_state.pop("redirect_target", None)
         st.session_state.pop("update_check_done", None) # エラーの原因になるので消去しておく
+        loop_check = True
         
         st.rerun()
         return # 手前の処理を完全に終わらせて下のループを絶対に踏ませない
     # ─────────────────────────────────────────────────────────────────────────
 
-    # ページ表示に必要な初期値をここで安全にチェック・作成する
-    if "update_check_done" not in st.session_state:
-        st.session_state.update_check_done = False
+    if loop_check is None:
+        
+        # ページ表示に必要な初期値をここで安全にチェック・作成する
+        if "update_check_done" not in st.session_state:
+            st.session_state.update_check_done = False
 
-    if st.button("← ダッシュボードに戻る"):
-        st.session_state.update_check_done = False
-        st.session_state.current_page = "dashboard"
-        st.rerun()
-
-    st.divider()
-
-    if not st.session_state.update_check_done:
-        if st.button("🔍 更新チェック開始"):
-            cached_get_latest_chapter_count.clear()
-            st.session_state.update_check_done = True
+        if st.button("← ダッシュボードに戻る"):
+            st.session_state.update_check_done = False
+            st.session_state.current_page = "dashboard"
             st.rerun()
-        return
 
-    novels = cached_get_user_novels(st.session_state.user_email)
-    if not novels:
-        st.info("登録済み小説がありません")
-        return
+        st.divider()
 
-    st.subheader("更新チェック結果")
-    progress_bar = st.progress(0)
-    status_text = st.empty()
-    total_novels = len(novels)
+        if not st.session_state.update_check_done:
+            if st.button("🔍 更新チェック開始"):
+                cached_get_latest_chapter_count.clear()
+                st.session_state.update_check_done = True
+                st.rerun()
+            return
 
-    for i, novel in enumerate(novels):
-        status_text.text(f"チェック中: {novel['title']} ({i+1}/{total_novels})")
-        try:
-            current_chapters = cached_get_latest_chapter_count(novel['url'])
-            if current_chapters > novel['latest_chapter']:
-                added = current_chapters - novel['latest_chapter']
-                st.success(f"📈 **{novel['title']}**: {novel['latest_chapter']}話 → {current_chapters}話 (+{added}話)")
-                
-                # ボタンが押されたら、即座に上の「ガード機能」を起動するための目印をセッションに植え付ける
-                if st.button("📥 この作品の管理・DL画面へ", key=f"go_dl_{novel['id']}"):
-                    st.session_state.redirect_target = {
-                        "url": novel["url"],
-                        "chapters": current_chapters
-                    }
-                    st.rerun()
-            else:
-                st.info(f"✅ **{novel['title']}**: 更新なし ({current_chapters}話)")
-        except Exception as e:
-            st.error(f"❌ **{novel['title']}**: チェック失敗 - {str(e)}")
+        novels = cached_get_user_novels(st.session_state.user_email)
+        if not novels:
+            st.info("登録済み小説がありません")
+            return
 
-        progress_bar.progress((i + 1) / total_novels)
-        time.sleep(1)
+        st.subheader("更新チェック結果")
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+        total_novels = len(novels)
 
-    progress_bar.empty()
-    status_text.empty()
+        for i, novel in enumerate(novels):
+            status_text.text(f"チェック中: {novel['title']} ({i+1}/{total_novels})")
+            try:
+                current_chapters = cached_get_latest_chapter_count(novel['url'])
+                if current_chapters > novel['latest_chapter']:
+                    added = current_chapters - novel['latest_chapter']
+                    st.success(f"📈 **{novel['title']}**: {novel['latest_chapter']}話 → {current_chapters}話 (+{added}話)")
+                    
+                    # ボタンが押されたら、即座に上の「ガード機能」を起動するための目印をセッションに植え付ける
+                    if st.button("📥 この作品の管理・DL画面へ", key=f"go_dl_{novel['id']}"):
+                        st.session_state.redirect_target = {
+                            "url": novel["url"],
+                            "chapters": current_chapters
+                        }
+                        st.rerun()
+                else:
+                    st.info(f"✅ **{novel['title']}**: 更新なし ({current_chapters}話)")
+            except Exception as e:
+                st.error(f"❌ **{novel['title']}**: チェック失敗 - {str(e)}")
+
+            progress_bar.progress((i + 1) / total_novels)
+            time.sleep(1)
+
+        progress_bar.empty()
+        status_text.empty()
+    
+    else:
+        pass
 
 
 # ページルーティング表示
