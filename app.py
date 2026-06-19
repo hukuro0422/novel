@@ -447,8 +447,20 @@ def settings_page():
 
 def update_check_page():
     st.title("🔄 全て更新チェック")
-    if "update_check_done" not in st.session_state:
+    
+    # ─── 【超重要】ボタン押下後の再実行時に、手前のループを完全にバイパス（スキップ）するガード ───
+    if "redirect_target" in st.session_state:
+        target = st.session_state.redirect_target
+        # セッションに必要なデータを移し替える
+        st.session_state.active_url = target["url"]
+        st.session_state.checked_latest_total = target["chapters"]
+        st.session_state.current_page = "download_and_manage"
+        # 使い終わったガード用変数を削除
+        del st.session_state["redirect_target"]
         st.session_state.update_check_done = False
+        st.rerun()
+        return # ここで関数を完全に終わらせることで、下のループを絶対に踏ませない
+    # ─────────────────────────────────────────────────────────────────────────
 
     if st.button("← ダッシュボードに戻る"):
         st.session_state.update_check_done = False
@@ -474,11 +486,6 @@ def update_check_page():
     status_text = st.empty()
     total_novels = len(novels)
 
-    
-    # ─── 修正ポイント：ボタン押下イベントを退避させるための変数 ───
-    target_novel_url = None
-    target_chapters = None
-
     for i, novel in enumerate(novels):
         status_text.text(f"チェック中: {novel['title']} ({i+1}/{total_novels})")
         try:
@@ -487,10 +494,13 @@ def update_check_page():
                 added = current_chapters - novel['latest_chapter']
                 st.success(f"📈 **{novel['title']}**: {novel['latest_chapter']}話 → {current_chapters}話 (+{added}話)")
                 
-                # ボタンが押されたら、セッションに書き込むための情報をローカル変数にキープする
+                # ボタンが押されたら、即座に上の「ガード機能」を起動するための目印をセッションに植え付ける
                 if st.button("📥 この作品の管理・DL画面へ", key=f"go_dl_{novel['id']}"):
-                    target_novel_url = novel['url']
-                    target_chapters = current_chapters
+                    st.session_state.redirect_target = {
+                        "url": novel["url"],
+                        "chapters": current_chapters
+                    }
+                    st.rerun()
             else:
                 st.info(f"✅ **{novel['title']}**: 更新なし ({current_chapters}話)")
         except Exception as e:
@@ -501,13 +511,6 @@ def update_check_page():
 
     progress_bar.empty()
     status_text.empty()
-
-    # ─── 修正ポイント：ループを完全に抜けた後に安全に遷移処理を行う ───
-    if target_novel_url is not None:
-        st.session_state.active_url = target_novel_url
-        st.session_state.checked_latest_total = target_chapters
-        st.session_state.current_page = "download_and_manage"
-        st.rerun()
 
 
 # ページルーティング表示
