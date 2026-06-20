@@ -66,20 +66,55 @@ cookies = EncryptedCookieManager(
 if not cookies.ready():
     st.info("ブラウザ設定を読み込み中です...")
     st.stop()
-
+    
 def process_cover_image(uploaded_file):
-    """アップロードされた画像を400x800のグレースケールに変換し、一時ファイルのパスを返す"""
+    """
+    アップロードされた画像をアスペクト比を維持したまま
+    800x480にリサイズし、はみ出た部分を中央で切り取って（グレースケール化）返す
+    """
     if uploaded_file is None:
         return None
         
     suffix = os.path.splitext(uploaded_file.name)[1]
     tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
     
+    # 画像を開く
     img = Image.open(uploaded_file)
-    gray_img = img.convert("L")
-    resized_img = gray_img.resize((400, 800), Image.Resampling.LANCZOS)
     
-    resized_img.save(tmp.name)
+    # ターゲットとするサイズ
+    target_width = 800
+    target_height = 480
+    
+    # 1. 元の画像とターゲットの比率を計算
+    orig_width, orig_height = img.size
+    orig_aspect = orig_width / orig_height
+    target_aspect = target_width / target_height
+    
+    # 2. 比率を維持したまま、ターゲットサイズを「完全に覆う」大きさを計算
+    if orig_aspect > target_aspect:
+        # 元画像の方が横長の場合 → 縦幅をターゲットに合わせる
+        new_height = target_height
+        new_width = int(target_height * orig_aspect)
+    else:
+        # 元画像の方が縦長の場合 → 横幅をターゲットに合わせる
+        new_width = target_width
+        new_height = int(target_width / orig_aspect)
+        
+    # 比率維持のまま一旦リサイズ（ここではまだはみ出ている）
+    resized_img = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
+    
+    # 3. 中央部分を切り取る（クロップ）ための座標を計算
+    left = (new_width - target_width) / 2
+    top = (new_height - target_height) / 2
+    right = (new_width + target_width) / 2
+    bottom = (new_height + target_height) / 2
+    
+    # 中央で綺麗に切り抜き
+    cropped_img = resized_img.crop((left, top, right, bottom))
+    
+    # 4. グレースケールに変換して保存
+    gray_img = cropped_img.convert("L")
+    gray_img.save(tmp.name)
     tmp.close()
     
     return tmp.name
