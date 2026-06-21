@@ -82,8 +82,8 @@ def process_cover_image(uploaded_file):
     img = Image.open(uploaded_file)
     
     # ターゲットとするサイズ
-    target_width = 800
-    target_height = 480
+    target_width = 480
+    target_height = 800
     
     # 1. 元の画像とターゲットの比率を計算
     orig_width, orig_height = img.size
