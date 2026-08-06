@@ -6,6 +6,7 @@ import base64
 from io import BytesIO
 
 from novel_downloader import create_epub, get_latest_chapter_count
+from networking import configure_networking
 from database import (
     get_user_by_email,
     register_user,
@@ -157,6 +158,41 @@ if "current_page" not in st.session_state:
     st.session_state.current_page = "login"
 if "active_url" not in st.session_state:
     st.session_state.active_url = ""
+
+
+def cookie_number(key, default, cast, minimum, maximum):
+    """暗号化Cookieから安全に数値設定を復元する。"""
+    try:
+        raw_value = cookies.get(key)
+        value = cast(default if raw_value in (None, "") else raw_value)
+    except (TypeError, ValueError):
+        value = default
+    return min(max(value, minimum), maximum)
+
+
+if "network_interval" not in st.session_state:
+    st.session_state.network_interval = cookie_number(
+        "network_interval", 2.5, float, 1.5, 10.0
+    )
+if "network_jitter" not in st.session_state:
+    st.session_state.network_jitter = cookie_number(
+        "network_jitter", 0.75, float, 0.0, 3.0
+    )
+if "network_retries" not in st.session_state:
+    st.session_state.network_retries = cookie_number(
+        "network_retries", 3, int, 1, 5
+    )
+if "network_backoff" not in st.session_state:
+    st.session_state.network_backoff = cookie_number(
+        "network_backoff", 1.5, float, 0.5, 5.0
+    )
+
+configure_networking(
+    st.session_state.network_interval,
+    st.session_state.network_jitter,
+    st.session_state.network_retries,
+    st.session_state.network_backoff,
+)
 
 if st.session_state.user_email is None:
     saved_email = cookies.get("user_email")
@@ -387,24 +423,26 @@ def dashboard_page():
     """ダッシュボード"""
     inject_app_styles()
 
-    title_col, download_col = st.columns([5, 1.5], vertical_alignment="center")
+    title_col, settings_col, download_col = st.columns(
+        [4.5, 1.2, 1.7], vertical_alignment="center"
+    )
     with title_col:
         st.markdown('<h1 class="library-title">📚 本棚</h1>', unsafe_allow_html=True)
         st.caption(f"同期中: {st.session_state.user_email}")
+    with settings_col:
+        if st.button("⚙️ 設定", use_container_width=True):
+            st.session_state.current_page = "settings"
+            st.rerun()
     with download_col:
         if st.button("＋ ダウンロード", use_container_width=True, type="primary"):
             st.session_state.pop("checked_latest_total", None)
             st.session_state.active_url = ""
             st.session_state.current_page = "download_and_manage"
             st.rerun()
-    with st.expander("設定・アカウント"):
-        account_col, settings_col, logout_col = st.columns([3, 1, 1])
+    with st.expander("アカウント"):
+        account_col, logout_col = st.columns([4, 1])
         with account_col:
             st.write(st.session_state.user_email)
-        with settings_col:
-            if st.button("⚙️ 設定", use_container_width=True):
-                st.session_state.current_page = "settings"
-                st.rerun()
         with logout_col:
             if st.button("ログアウト", use_container_width=True):
                 st.session_state.user_email = None
@@ -737,6 +775,91 @@ def settings_page():
         st.session_state.current_page = "dashboard"
         st.rerun()
     st.divider()
+    st.subheader("アクセス設定")
+    st.caption(
+        "小説サイトへの負荷とアクセス制限を避けるための設定です。"
+        "短すぎる間隔には設定できません。"
+    )
+
+    with st.form("network_settings_form"):
+        interval = st.slider(
+            "最小アクセス間隔（秒）",
+            min_value=1.5,
+            max_value=10.0,
+            value=float(st.session_state.network_interval),
+            step=0.5,
+            help="各ページへアクセスする前に最低限待つ時間です。推奨は2.5秒以上です。",
+        )
+        jitter = st.slider(
+            "ランダム待機時間（最大秒）",
+            min_value=0.0,
+            max_value=3.0,
+            value=float(st.session_state.network_jitter),
+            step=0.25,
+            help="一定間隔にならないよう、最小間隔へランダムに加える時間です。",
+        )
+        retries = st.slider(
+            "通信失敗時の再試行回数",
+            min_value=1,
+            max_value=5,
+            value=int(st.session_state.network_retries),
+            step=1,
+        )
+        backoff = st.slider(
+            "再試行の待機倍率",
+            min_value=0.5,
+            max_value=5.0,
+            value=float(st.session_state.network_backoff),
+            step=0.5,
+            help="失敗が続くほど次の再試行まで長く待つための倍率です。",
+        )
+        saved = st.form_submit_button(
+            "設定を保存", type="primary", use_container_width=True
+        )
+
+    if saved:
+        st.session_state.network_interval = interval
+        st.session_state.network_jitter = jitter
+        st.session_state.network_retries = retries
+        st.session_state.network_backoff = backoff
+        cookies["network_interval"] = str(interval)
+        cookies["network_jitter"] = str(jitter)
+        cookies["network_retries"] = str(retries)
+        cookies["network_backoff"] = str(backoff)
+        cookies.save()
+        configure_networking(interval, jitter, retries, backoff)
+        cached_get_latest_chapter_count.clear()
+        st.success("アクセス設定を保存しました。次の通信から反映されます。")
+
+    st.info(
+        "おすすめ: 最小間隔 2.5秒、ランダム待機 0.75秒、"
+        "再試行 3回、待機倍率 1.5"
+    )
+
+    if st.button("おすすめ設定に戻す", use_container_width=True):
+        st.session_state.network_interval = 2.5
+        st.session_state.network_jitter = 0.75
+        st.session_state.network_retries = 3
+        st.session_state.network_backoff = 1.5
+        cookies["network_interval"] = "2.5"
+        cookies["network_jitter"] = "0.75"
+        cookies["network_retries"] = "3"
+        cookies["network_backoff"] = "1.5"
+        cookies.save()
+        configure_networking(2.5, 0.75, 3, 1.5)
+        cached_get_latest_chapter_count.clear()
+        st.rerun()
+
+    st.divider()
+    st.subheader("アカウント")
+    st.write(st.session_state.user_email)
+    if st.button("ログアウト", use_container_width=True):
+        st.session_state.user_email = None
+        st.session_state.current_page = "login"
+        st.session_state.pop("check_results", None)
+        cookies["user_email"] = ""
+        cookies.save()
+        st.rerun()
 
 
 def update_novel_page():
