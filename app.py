@@ -39,6 +39,37 @@ def cached_get_user_novels(email):
 def cached_get_latest_chapter_count(url):
     return get_latest_chapter_count(url)
 
+
+def normalize_novel_rows(value):
+    """Supabaseや古いキャッシュ由来の作品一覧を辞書のリストへ揃える。"""
+    if value is None:
+        return []
+
+    if isinstance(value, dict):
+        # Supabaseレスポンス風の {"data": [...]} と、単一行の両方に対応する。
+        value = value.get("data") if "data" in value else [value]
+
+    if not isinstance(value, (list, tuple)):
+        return []
+
+    novels = []
+    for row in value:
+        if hasattr(row, "model_dump"):
+            row = row.model_dump()
+        elif hasattr(row, "dict") and callable(row.dict):
+            row = row.dict()
+
+        if not isinstance(row, dict):
+            continue
+
+        novel = dict(row)
+        if not novel.get("id") or not novel.get("url"):
+            continue
+        novel["title"] = novel.get("title") or "タイトル不明"
+        novels.append(novel)
+
+    return novels
+
 warnings.filterwarnings(
     "ignore",
     message="st.cache is deprecated"
@@ -384,7 +415,9 @@ def dashboard_page():
                 st.rerun()
 
     st.subheader("ダウンロード済み", divider="gray")
-    novels = cached_get_user_novels(st.session_state.user_email)
+    novels = normalize_novel_rows(
+        cached_get_user_novels(st.session_state.user_email)
+    )
     
     if not novels:
         st.info("登録済み小説がありません")
@@ -722,3 +755,4 @@ elif st.session_state.current_page == "update_novel":
     update_novel_page()
 elif st.session_state.current_page == "settings":
     settings_page()
+
