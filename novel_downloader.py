@@ -49,10 +49,17 @@ def clean_filename(text):
 
 def build_episode_cache(cached_episodes=None):
     """DB行を、サイト間で共通利用できる本文マップへ変換する。"""
+    if isinstance(cached_episodes, dict):
+        nested = cached_episodes.get("data")
+        cached_episodes = (
+            nested if isinstance(nested, (list, tuple)) else [cached_episodes]
+        )
     return {
         str(ep["episode_id"]): ep.get("body_html", "")
         for ep in (cached_episodes or [])
-        if ep.get("episode_id") and ep.get("body_html")
+        if isinstance(ep, dict)
+        and ep.get("episode_id")
+        and ep.get("body_html")
     }
 
 
@@ -839,3 +846,4 @@ def get_latest_chapter_count(url: str, log_callback=None) -> int:
 
     else:
         raise ValueError("対応していないURLです。なろう、またはカクヨムの作品URLを入力してください。")
+

@@ -36,6 +36,21 @@ def get_supabase_client():
 supabase: Client = get_supabase_client()
 
 
+def normalize_result_rows(data):
+    """Supabase SDKの返却形式を、常に辞書のリストへ揃える。"""
+    if data is None:
+        return []
+    if isinstance(data, dict):
+        nested = data.get("data")
+        if isinstance(nested, (list, tuple)):
+            data = nested
+        else:
+            data = [data]
+    if not isinstance(data, (list, tuple)):
+        return []
+    return [dict(row) for row in data if isinstance(row, dict)]
+
+
 def create_tables():
     """テーブルを初期化（初回のみ）"""
     # ユーザーテーブル
@@ -66,8 +81,9 @@ def get_user_by_email(email: str):
     """メールアドレスからユーザーを取得"""
     try:
         result = supabase.table("users").select("*").eq("email", email).execute()
-        if result.data:
-            return result.data[0]
+        rows = normalize_result_rows(result.data)
+        if rows:
+            return rows[0]
         return None
     except Exception as e:
         return None
@@ -77,7 +93,7 @@ def get_user_novels(email: str):
     """ユーザーの登録済み小説一覧を取得"""
     try:
         result = supabase.table("novels").select("*").eq("email", email).execute()
-        return result.data if result.data else []
+        return normalize_result_rows(result.data)
     except Exception as e:
         return []
 
@@ -99,8 +115,9 @@ def register_novel(email: str, url: str, title: str, cover_image=None):
             "registered_at": datetime.now().isoformat()
         }).execute()
         
-        if result.data:
-            return True, "小説を登録しました", result.data[0]["id"]
+        rows = normalize_result_rows(result.data)
+        if rows:
+            return True, "小説を登録しました", rows[0]["id"]
         return False, "登録に失敗しました"
     except Exception as e:
         if "duplicate" in str(e).lower():
@@ -139,7 +156,8 @@ def get_download_history(email: str, novel_id: int):
     """小説のダウンロード履歴を取得"""
     try:
         result = supabase.table("downloads").select("*").eq("email", email).eq("novel_id", novel_id).order("downloaded_at", desc=True).limit(1).execute()
-        return result.data[0] if result.data else None
+        rows = normalize_result_rows(result.data)
+        return rows[0] if rows else None
     except Exception as e:
         return None
 
@@ -183,7 +201,7 @@ def get_cached_chapters(email: str, novel_id: int):
         .order("episode_index")
         .execute()
     )
-    return result.data or []
+    return normalize_result_rows(result.data)
 
 
 def upsert_cached_chapters(email: str, novel_id: int, chapters):
@@ -216,3 +234,4 @@ def upsert_cached_chapters(email: str, novel_id: int, chapters):
         )
         saved += len(result.data or batch)
     return saved
+
