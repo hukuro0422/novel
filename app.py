@@ -503,7 +503,9 @@ def download_and_manage_page(update_only=False):
         return
 
     # ─── 登録状態の自動自動判別 ───
-    novels = cached_get_user_novels(st.session_state.user_email)
+    novels = normalize_novel_rows(
+        cached_get_user_novels(st.session_state.user_email)
+    )
     matched_novel = None
     if novels:
         for n in novels:
@@ -755,4 +757,5 @@ elif st.session_state.current_page == "update_novel":
     update_novel_page()
 elif st.session_state.current_page == "settings":
     settings_page()
+
 
