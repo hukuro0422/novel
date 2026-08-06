@@ -118,9 +118,23 @@ def register_novel(email: str, url: str, title: str, cover_image=None):
         rows = normalize_result_rows(result.data)
         if rows:
             return True, "小説を登録しました", rows[0]["id"]
-        return False, "登録に失敗しました"
+
+        # PostgRESTがinsert結果を返さない設定でも、登録済み行を再取得する。
+        lookup = (
+            supabase.table("novels")
+            .select("id")
+            .eq("email", email)
+            .eq("url", url)
+            .limit(1)
+            .execute()
+        )
+        lookup_rows = normalize_result_rows(lookup.data)
+        if lookup_rows:
+            return True, "小説を登録しました", lookup_rows[0]["id"]
+        return False, "登録結果を確認できませんでした", None
     except Exception as e:
-        if "duplicate" in str(e).lower():
+        error_text = str(e).lower()
+        if "duplicate" in error_text or "23505" in error_text or "unique" in error_text:
             return False, "この小説は既に登録されています", None
         return False, str(e), None
 
@@ -234,4 +248,3 @@ def upsert_cached_chapters(email: str, novel_id: int, chapters):
         )
         saved += len(result.data or batch)
     return saved
-
