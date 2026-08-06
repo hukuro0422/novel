@@ -10,16 +10,22 @@ load_dotenv('.env.local')
 
 SUPABASE_URL = os.getenv("SUPABASE_URL", "")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY", "")
+SUPABASE_SECRET_KEY = os.getenv("SUPABASE_SECRET_KEY", "")
 
 def get_supabase_client():
     """Streamlit Cloudとローカル実行の両方に対応"""
     try:
         import streamlit as st
         url = st.secrets.get("SUPABASE_URL") or SUPABASE_URL
-        key = st.secrets.get("SUPABASE_KEY") or SUPABASE_KEY
+        key = (
+            st.secrets.get("SUPABASE_SECRET_KEY")
+            or st.secrets.get("SUPABASE_KEY")
+            or SUPABASE_SECRET_KEY
+            or SUPABASE_KEY
+        )
     except:
         url = SUPABASE_URL
-        key = SUPABASE_KEY
+        key = SUPABASE_SECRET_KEY or SUPABASE_KEY
 
     if not url or not key:
         raise ValueError("SUPABASE_URL and SUPABASE_KEY environment variables are required")
@@ -163,3 +169,50 @@ def update_cover_image(novel_id: int, cover_image):
         return True
     except Exception as e:
         return False
+
+
+def get_cached_chapters(email: str, novel_id: int):
+    """作品の保存済み本文を話順で取得する。"""
+    result = (
+        supabase.table("novel_chapters")
+        .select(
+            "episode_id,episode_index,chapter_title,title,body_html,source_url"
+        )
+        .eq("email", email)
+        .eq("novel_id", novel_id)
+        .order("episode_index")
+        .execute()
+    )
+    return result.data or []
+
+
+def upsert_cached_chapters(email: str, novel_id: int, chapters):
+    """取得した本文を小分けにupsertし、途中失敗時の影響を抑える。"""
+    if not chapters:
+        return 0
+
+    rows = []
+    for chapter in chapters:
+        rows.append({
+            "email": email,
+            "novel_id": novel_id,
+            "episode_id": str(chapter["episode_id"]),
+            "episode_index": int(chapter["episode_index"]),
+            "chapter_title": chapter.get("chapter_title") or "",
+            "title": chapter.get("title") or "無題",
+            "body_html": chapter.get("body_html") or "",
+            "source_url": chapter.get("source_url"),
+            "updated_at": datetime.now().isoformat(),
+        })
+
+    saved = 0
+    batch_size = 100
+    for offset in range(0, len(rows), batch_size):
+        batch = rows[offset:offset + batch_size]
+        result = (
+            supabase.table("novel_chapters")
+            .upsert(batch, on_conflict="novel_id,episode_id")
+            .execute()
+        )
+        saved += len(result.data or batch)
+    return saved

@@ -6,8 +6,23 @@ import tempfile
 import requests
 
 from bs4 import BeautifulSoup
-from ebooklib import epub
 from urllib.parse import urlparse, urljoin
+
+from epub_builder import safe_filename, write_epub
+from site_parsers import (
+    extract_kakuyomu_body,
+    extract_narou_body,
+    extract_narou_toc_entries,
+    find_narou_next_toc_url,
+)
+
+from networking import (
+    AccessRestrictedError,
+    NovelNetworkError,
+    PoliteSession,
+    WorkNotFoundError,
+    validate_response,
+)
 
 
 def normalize_narou_url(url):
@@ -28,7 +43,25 @@ def normalize_kakuyomu_url(url):
 
 
 def clean_filename(text):
-    return re.sub(r'[\\/:*?"<>|]', '', text)
+    """旧コードとの互換用。新規処理はepub_builder.safe_filenameを使用する。"""
+    return safe_filename(text)
+
+
+def build_episode_cache(cached_episodes=None):
+    """DB行を、サイト間で共通利用できる本文マップへ変換する。"""
+    return {
+        str(ep["episode_id"]): ep.get("body_html", "")
+        for ep in (cached_episodes or [])
+        if ep.get("episode_id") and ep.get("body_html")
+    }
+
+
+def find_missing_episodes(episode_list, cached_content, start_episode=1):
+    """指定位置以降から、本文が未取得の話だけを話順のまま返す。"""
+    return [
+        item for item in episode_list[max(start_episode - 1, 0):]
+        if str(item["id"]) not in cached_content
+    ]
 
 
 def detect_site(url: str) -> str:
@@ -45,25 +78,16 @@ def detect_site(url: str) -> str:
     return "unknown"
 
 def create_session():
-    session = requests.Session()
+    session = PoliteSession()
 
     session.headers.update({
-        "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/136.0.0.0 Safari/537.36"
-        ),
-        "Referer": "https://syosetu.com/",
-        "Origin": "https://syosetu.com",
+        "User-Agent": "NovelDownloader/2.0 (personal EPUB reader)",
         "Accept": (
             "text/html,application/xhtml+xml,"
             "application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8"
         ),
         "Accept-Language": "ja,en-US;q=0.9,en;q=0.8",
-        "Cache-Control": "no-cache",
-        "Pragma": "no-cache",
         "Connection": "keep-alive",
-        "Upgrade-Insecure-Requests": "1",
         "Cookie": "over18=yes"
     })
 
@@ -72,23 +96,19 @@ def create_session():
 
 def get_soup(session, url, log_callback=None):
     try:
-        time.sleep(1.0)  # アクセス間隔を空ける
-        res = session.get(url, timeout=15)
-
-        if res.status_code == 404:
-            if log_callback:
-                log_callback("作品が存在しません")
-            return None
-
-        res.raise_for_status()
+        res = session.get(url)
+        validate_response(res, url)
 
         return BeautifulSoup(res.content, "html.parser")
 
-    except Exception as e:
+    except (WorkNotFoundError, AccessRestrictedError):
+        raise
+    except NovelNetworkError:
+        raise
+    except requests.RequestException as e:
         if log_callback:
             log_callback(f"【通信エラー】: {url} - {e}")
-
-        return None
+        raise NovelNetworkError(f"通信に失敗しました: {url}") from e
 
 
 def save_epub(
@@ -100,89 +120,15 @@ def save_epub(
     site_name,
     cover_path=None
 ):
-    if not vol_episodes:
-        return
-
-    safe_vol_title = clean_filename(vol_title)
-
-    filename = f"{file_idx:02d}_{safe_vol_title}.epub"
-
-    path = os.path.join(folder_path, filename)
-
-    book = epub.EpubBook()
-
-    book.set_title(f"{main_title} - {vol_title}")
-    book.set_language("ja")
-    book.add_author(site_name)
-
-    style = """
-    body {
-        font-family: serif;
-        padding: 1em;
-        line-height: 1.8;
-    }
-
-    h1 {
-        text-align: center;
-    }
-
-    p {
-        text-indent: 1em;
-        margin: 0.5em 0;
-    }
-    """
-
-    css = epub.EpubItem(
-        uid="style",
-        file_name="style.css",
-        media_type="text/css",
-        content=style
+    return write_epub(
+        main_title=main_title,
+        volume_title=vol_title,
+        episodes=vol_episodes,
+        file_index=file_idx,
+        folder_path=folder_path,
+        site_name=site_name,
+        cover_path=cover_path,
     )
-
-    book.add_item(css)
-
-    if cover_path and os.path.exists(cover_path):
-        with open(cover_path, "rb") as f:
-            book.set_cover(
-                "cover" + os.path.splitext(cover_path)[1],
-                f.read()
-            )
-
-    chapters = []
-
-    for ep in vol_episodes:
-        c = epub.EpubHtml(
-            title=ep["title"],
-            file_name=f"ep_{ep['id']}.xhtml"
-        )
-
-        c.set_content(
-            f"""
-            <html>
-            <body>
-            <h1>{ep["title"]}</h1>
-            {ep["body"]}
-            </body>
-            </html>
-            """
-        )
-
-        c.add_item(css)
-
-        book.add_item(c)
-
-        chapters.append(c)
-
-    book.toc = tuple(chapters)
-
-    book.spine = ['nav'] + chapters
-
-    book.add_item(epub.EpubNcx())
-    book.add_item(epub.EpubNav())
-
-    epub.write_epub(path, book)
-
-    return path
 
 
 def create_epub(
@@ -190,7 +136,9 @@ def create_epub(
     cover_path=None,
     progress_callback=None,
     log_callback=None,
-    start_episode=1
+    start_episode=1,
+    cached_episodes=None,
+    chapter_callback=None,
 ):
     session = create_session()
 
@@ -338,9 +286,19 @@ def create_epub(
             if s["type"] == "episode"
         ]
 
-        ep_content_map = {}
+        ep_content_map = build_episode_cache(cached_episodes)
 
-        for i, item in enumerate(episode_list, 1):
+        chapter_by_episode = {}
+        current_chapter_title = work_title
+        for structure_item in final_structure:
+            if structure_item["type"] == "chapter":
+                current_chapter_title = structure_item["title"]
+            elif structure_item["type"] == "episode":
+                chapter_by_episode[str(structure_item["id"])] = current_chapter_title
+
+        missing_episodes = find_missing_episodes(episode_list, ep_content_map)
+
+        for i, item in enumerate(missing_episodes, 1):
 
             ep_url = (
                 f"https://kakuyomu.jp/works/"
@@ -355,32 +313,27 @@ def create_epub(
 
             if ep_soup:
 
-                body = (
-                    ep_soup.select_one(".widget-episodeBody")
-                    or
-                    ep_soup.select_one(".js-episode-body")
-                )
+                content = extract_kakuyomu_body(ep_soup)
 
-                if body:
+                if content:
 
-                    for t in body.find_all(["rt", "rp"]):
-                        t.decompose()
+                    episode_id = str(item["id"])
+                    ep_content_map[episode_id] = content
 
-                    for r in body.find_all("ruby"):
-                        r.unwrap()
-
-                    content = "".join([
-                        f"<p>{p.get_text(strip=True)}</p>"
-                        for p in body.find_all("p")
-                        if p.get_text(strip=True)
-                    ])
-
-                    ep_content_map[item["id"]] = content
+                    if chapter_callback:
+                        chapter_callback({
+                            "episode_id": episode_id,
+                            "episode_index": episode_list.index(item) + 1,
+                            "chapter_title": chapter_by_episode.get(episode_id, work_title),
+                            "title": item["title"],
+                            "body_html": content,
+                            "source_url": ep_url,
+                        })
 
                     if progress_callback:
                         progress_callback(
                             i,
-                            i / len(episode_list) * 100,
+                            i / max(len(missing_episodes), 1) * 100,
                             item["title"]
                         )
 
@@ -416,13 +369,13 @@ def create_epub(
 
             elif (
                 item["type"] == "episode"
-                and item["id"] in ep_content_map
+                and str(item["id"]) in ep_content_map
             ):
 
                 buffer.append({
                     "id": item["id"],
                     "title": item["title"],
-                    "body": ep_content_map[item["id"]]
+                    "body": ep_content_map[str(item["id"])]
                 })
 
         if buffer:
@@ -489,57 +442,23 @@ def create_epub(
 
                 os.makedirs(book_folder, exist_ok=True)
 
-            index_box = soup.select_one(".p-eplist")
+            for entry in extract_narou_toc_entries(soup):
+                if entry["type"] == "chapter":
+                    structure.append({
+                        "type": "chapter",
+                        "title": entry["title"],
+                    })
+                elif entry["id"] not in seen_ids:
+                    seen_ids.add(entry["id"])
+                    structure.append({
+                        "type": "episode",
+                        "id": entry["id"],
+                        "title": entry["title"],
+                    })
 
-            if index_box:
-
-                for child in index_box.find_all(
-                    "div",
-                    recursive=False
-                ):
-
-                    cls = child.get("class", [])
-
-                    if "p-eplist__chapter-title" in cls:
-
-                        structure.append({
-                            "type": "chapter",
-                            "title": child.get_text(strip=True)
-                        })
-
-                    elif "p-eplist__sublist" in cls:
-
-                        subtitle_tag = child.select_one(
-                            ".p-eplist__subtitle"
-                        )
-
-                        if subtitle_tag:
-
-                            href = subtitle_tag["href"].rstrip("/")
-
-                            eid = href.split("/")[-1]
-
-                            if eid not in seen_ids:
-
-                                seen_ids.add(eid)
-
-                                structure.append({
-                                    "type": "episode",
-                                    "id": eid,
-                                    "title": subtitle_tag.get_text(strip=True)
-                                })
-
-            next_link = soup.find(
-                "a",
-                string=lambda s: s and "次へ" in s
-            )
-
-            if next_link:
-
-                current_idx = urljoin(
-                    current_idx,
-                    next_link["href"]
-                )
+            next_page_url = find_narou_next_toc_url(soup, current_idx)
+            if next_page_url:
+                current_idx = next_page_url
 
                 time.sleep(0.5)
 
@@ -558,9 +477,21 @@ def create_epub(
             if s["type"] == "episode"
         ]
 
-        ep_content_map = {}
+        ep_content_map = build_episode_cache(cached_episodes)
 
-        filtered_ep_list = ep_list[start_episode - 1:]
+        chapter_by_episode = {}
+        current_chapter_title = work_title
+        for structure_item in structure:
+            if structure_item["type"] == "chapter":
+                current_chapter_title = structure_item["title"]
+            elif structure_item["type"] == "episode":
+                chapter_by_episode[str(structure_item["id"])] = current_chapter_title
+
+        filtered_ep_list = find_missing_episodes(
+            ep_list,
+            ep_content_map,
+            start_episode=start_episode,
+        )
 
         for i, item in enumerate(filtered_ep_list, 1):
 
@@ -583,40 +514,30 @@ def create_epub(
 
             if ep_soup:
 
-                blocks = ep_soup.find_all(
-                    "div",
-                    class_="js-novel-text"
-                )
+                html = extract_narou_body(ep_soup)
 
-                html = ""
+                if not html:
+                    if log_callback:
+                        log_callback(f"本文を取得できませんでした: {item['title']}")
+                    continue
 
-                for b in blocks:
+                episode_id = str(item["id"])
+                ep_content_map[episode_id] = html
 
-                    if (
-                        "p-novel__text--preface" in b.get("class", [])
-                        or
-                        "p-novel__text--afterword" in b.get("class", [])
-                    ):
-                        continue
-
-                    for t in b.find_all(["rt", "rp"]):
-                        t.decompose()
-
-                    for r in b.find_all("ruby"):
-                        r.unwrap()
-
-                    html += "".join([
-                        f"<p>{p.get_text(strip=True)}</p>"
-                        for p in b.find_all("p")
-                        if p.get_text(strip=True)
-                    ])
-
-                ep_content_map[item["id"]] = html
+                if chapter_callback:
+                    chapter_callback({
+                        "episode_id": episode_id,
+                        "episode_index": ep_list.index(item) + 1,
+                        "chapter_title": chapter_by_episode.get(episode_id, work_title),
+                        "title": item["title"],
+                        "body_html": html,
+                        "source_url": ep_url,
+                    })
 
                 if progress_callback:
                     progress_callback(
                         i,
-                        i / len(ep_list) * 100,
+                        i / max(len(filtered_ep_list), 1) * 100,
                         item["title"]
                     )
 
@@ -652,13 +573,13 @@ def create_epub(
 
             elif (
                 item["type"] == "episode"
-                and item["id"] in ep_content_map
+                and str(item["id"]) in ep_content_map
             ):
 
                 buffer.append({
                     "id": item["id"],
                     "title": item["title"],
-                    "body": ep_content_map[item["id"]]
+                    "body": ep_content_map[str(item["id"])]
                 })
 
         if buffer:
@@ -687,6 +608,7 @@ def _get_narou_episode_count_from_top_page(soup, top_url):
     session = create_session()
     episode_urls = set()
     current_url = top_url
+    current_soup = soup
     visited = set()
 
     while current_url:
@@ -694,28 +616,18 @@ def _get_narou_episode_count_from_top_page(soup, top_url):
             break
         visited.add(current_url)
 
-        soup = get_soup(session, current_url)
-        if not soup:
+        if not current_soup:
             break
 
-        # 現在のページ内の話数を取得
-        for a in soup.select(
-            ".p-eplist__sublist > a, "
-            ".p-eplist__sublist .p-eplist__subtitle"
-        ):
-            href = a.get("href")
-            if href:
-                full_url = urljoin(current_url, href)
-                episode_urls.add(full_url)
+        # 目次ページだけを巡回し、本文ページはまだ開かない。
+        for entry in extract_narou_toc_entries(current_soup):
+            if entry["type"] == "episode":
+                episode_urls.add(urljoin(current_url, entry["href"]))
 
-        # 次ページリンクを探す
-        next_link = soup.find(
-            "a",
-            string=lambda s: s and "次へ" in s
-        )
-
-        if next_link:
-            current_url = urljoin(current_url, next_link["href"])
+        next_page_url = find_narou_next_toc_url(current_soup, current_url)
+        if next_page_url:
+            current_url = next_page_url
+            current_soup = get_soup(session, current_url)
             time.sleep(0.2)
         else:
             current_url = None
@@ -736,9 +648,8 @@ def _get_kakuyomu_internal_work_id(url, session, log_callback=None):
     if log_callback:
         log_callback("カクヨムの作品IDを検索中")
 
-    res = session.get(search_url, timeout=15)
-    if res.status_code != 200:
-        return None
+    res = session.get(search_url)
+    validate_response(res, search_url)
 
     soup = BeautifulSoup(res.content, "html.parser")
     internal_ids = []
@@ -776,13 +687,14 @@ def _get_kakuyomu_episode_count_from_graphql(internal_id, session, log_callback=
         res = session.post(
             "https://kakuyomu.jp/graphql",
             json={"query": query, "variables": {"ids": [internal_id]}},
-            timeout=15,
             headers={"Content-Type": "application/json"}
         )
-        res.raise_for_status()
+        validate_response(res, "https://kakuyomu.jp/graphql")
         data = res.json()
-    except Exception:
-        return 0
+    except (WorkNotFoundError, AccessRestrictedError, NovelNetworkError):
+        raise
+    except (requests.RequestException, ValueError) as exc:
+        raise NovelNetworkError("カクヨムの話数情報を取得できませんでした。") from exc
 
     works = data.get("data", {}).get("works")
     if not works:
@@ -846,7 +758,12 @@ def get_latest_chapter_count(url: str, log_callback=None) -> int:
             else:
                 current_idx = None
 
-        return len(structure)
+        count = len(structure)
+        if count == 0:
+            raise NovelNetworkError(
+                "小説家になろうの話数を解析できませんでした。時間を空けて再試行してください。"
+            )
+        return count
 
     elif site_type == "kakuyomu":
         top_url = normalize_kakuyomu_url(url)
@@ -863,12 +780,12 @@ def get_latest_chapter_count(url: str, log_callback=None) -> int:
         soup = get_soup(session, top_url, log_callback)
 
         if not soup:
-            return 0
+            raise NovelNetworkError("カクヨムの作品ページを取得できませんでした。")
 
         next_data_script = soup.find("script", id="__NEXT_DATA__")
 
         if not next_data_script:
-            return 0
+            raise NovelNetworkError("カクヨムの作品情報を解析できませんでした。")
 
         data = json.loads(next_data_script.string)
         apollo = data.get("props", {}).get("pageProps", {}).get("__APOLLO_STATE__", {})
@@ -883,14 +800,14 @@ def get_latest_chapter_count(url: str, log_callback=None) -> int:
         work_key = f"Work:{work_id}"
 
         if work_key not in apollo:
-            return 0
+            raise NovelNetworkError("カクヨムの作品情報が見つかりませんでした。")
 
         work = apollo[work_key]
 
         # 目次構造取得
         toc_key = work.get("tableOfContents", {}).get("__ref")
         if not toc_key or toc_key not in apollo:
-            return 0
+            raise NovelNetworkError("カクヨムの目次情報が見つかりませんでした。")
 
         toc = apollo[toc_key]
 
@@ -916,7 +833,9 @@ def get_latest_chapter_count(url: str, log_callback=None) -> int:
                     })
 
         episode_list = [s for s in final_structure if s["type"] == "episode"]
+        if not episode_list:
+            raise NovelNetworkError("カクヨムの話数を解析できませんでした。")
         return len(episode_list)
 
     else:
-        return 0
+        raise ValueError("対応していないURLです。なろう、またはカクヨムの作品URLを入力してください。")

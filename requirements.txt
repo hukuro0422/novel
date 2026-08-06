@@ -1,8 +1,9 @@
-streamlit
-requests
-beautifulsoup4
-ebooklib
-lxml
-supabase
-python-dotenv
-streamlit-cookies-manager
+streamlit==1.61.1
+requests==2.34.2
+beautifulsoup4==4.15.0
+EbookLib==0.20
+lxml==6.1.1
+supabase==2.31.0
+python-dotenv==1.2.2
+streamlit-cookies-manager==0.2.0
+pillow==12.3.0

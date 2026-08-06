@@ -71,8 +71,8 @@ CREATE TABLE IF NOT EXISTS downloads (
 プロジェクトルートに `.env.local` ファイルを作成：
 
 ```
-SUPABASE_URL=https://pbtawxjpkrystmchmmjo.supabase.co
-SUPABASE_KEY=sb_publishable_N7iVoEgiSYA3KMkXSJjxnw_mPNW0Okt
+SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_KEY=sb_publishable_your_key
 ```
 
 ### Streamlit Cloud にデプロイする場合
@@ -87,6 +87,23 @@ SUPABASE_KEY=sb_publishable_N7iVoEgiSYA3KMkXSJjxnw_mPNW0Okt
 SUPABASE_URL="https://xxxxx.supabase.co"
 SUPABASE_KEY="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
 ```
+
+## 4.1 v2 本文キャッシュの追加設定
+
+1. Supabase の **SQL Editor** を開く
+2. `SUPABASE_CHAPTER_CACHE_SETUP.sql` の内容を貼り付けて実行する
+3. **Project Settings → API Keys** でサーバー用の Secret key を確認する
+4. Streamlit Community Cloud の **Secrets** に次を追加する
+
+```toml
+SUPABASE_URL="https://xxxxx.supabase.co"
+SUPABASE_SECRET_KEY="sb_secret_xxxxx"
+COOKIE_PASSWORD="十分に長いランダム文字列"
+```
+
+`SUPABASE_SECRET_KEY` はブラウザ、公開リポジトリ、`.env.local` に書かないでください。
+本文キャッシュテーブルは `anon` と `authenticated` から直接アクセスできず、
+Streamlit サーバーだけが読み書きします。
 
 ## 5. アプリをテスト
 

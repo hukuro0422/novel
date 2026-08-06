@@ -2,8 +2,6 @@ import streamlit as st
 import tempfile
 import os
 import zipfile
-import time
-from datetime import datetime
 import base64
 from io import BytesIO
 
@@ -17,7 +15,8 @@ from database import (
     record_download,
     delete_novel,
     update_cover_image,
-    get_download_history
+    get_cached_chapters,
+    upsert_cached_chapters,
 )
 from streamlit_cookies_manager import EncryptedCookieManager
 import warnings
@@ -150,6 +149,159 @@ def progress(i, percent, title):
         )
 
 
+def inject_app_styles():
+    """本棚を中心にしたレスポンシブUIの共通スタイル。"""
+    st.markdown(
+        """
+        <style>
+        .block-container {
+            max-width: 1180px;
+            padding-top: 2rem;
+        }
+        [data-testid="stVerticalBlockBorderWrapper"] {
+            border-radius: 16px;
+            border-color: rgba(128, 128, 128, 0.25);
+            box-shadow: 0 4px 18px rgba(0, 0, 0, 0.05);
+        }
+        [data-testid="stVerticalBlockBorderWrapper"]:hover {
+            border-color: rgba(255, 75, 75, 0.45);
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.09);
+        }
+        .library-title {
+            margin: 0;
+            font-size: clamp(1.7rem, 4vw, 2.5rem);
+            font-weight: 750;
+        }
+        .book-meta {
+            color: rgba(128, 128, 128, 0.95);
+            font-size: 0.85rem;
+        }
+        @media (max-width: 640px) {
+            .block-container { padding: 1rem 0.8rem; }
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_book_card(novel):
+    """登録済み作品を表紙付きカードとして表示する。"""
+    with st.container(border=True):
+        cover_col, detail_col = st.columns([1, 2.2], vertical_alignment="center")
+
+        with cover_col:
+            cover_data = novel.get("cover_image")
+            if cover_data:
+                try:
+                    st.image(base64.b64decode(cover_data), use_container_width=True)
+                except Exception:
+                    st.caption("📕 表紙なし")
+            else:
+                st.markdown("### 📕")
+                st.caption("表紙なし")
+
+        with detail_col:
+            st.markdown(f"#### {novel['title']}")
+            chapter_count = int(novel.get("latest_chapter") or 0)
+            st.markdown(
+                f'<div class="book-meta">保存済み {chapter_count} 話</div>',
+                unsafe_allow_html=True,
+            )
+
+            update_results = st.session_state.get("check_results") or []
+            update_result = next(
+                (
+                    result for result in update_results
+                    if result.get("id") == novel.get("id")
+                ),
+                None,
+            )
+            if update_result and update_result.get("has_update"):
+                if st.button(
+                    f"🆕 更新あり ＋{update_result['added']}話",
+                    key=f"update_novel_{novel['id']}",
+                    use_container_width=True,
+                ):
+                    st.session_state.active_url = novel["url"]
+                    st.session_state.active_novel_id = novel["id"]
+                    st.session_state.checked_latest_total = update_result["current_chapters"]
+                    st.session_state.current_page = "update_novel"
+                    st.rerun()
+            elif update_result and not update_result.get("error"):
+                st.caption("✓ 最新")
+            elif update_result and update_result.get("error"):
+                st.caption("⚠ 更新確認に失敗")
+
+            if st.button(
+                "開く",
+                key=f"open_novel_{novel['id']}",
+                use_container_width=True,
+                type="primary",
+            ):
+                st.session_state.pop("checked_latest_total", None)
+                st.session_state.active_url = novel["url"]
+                st.session_state.current_page = "download_and_manage"
+                st.rerun()
+
+            with st.popover("•••", use_container_width=True):
+                st.caption(novel["url"])
+                if st.button("本棚から削除", key=f"delete_novel_{novel['id']}"):
+                    try:
+                        if delete_novel(novel["id"]):
+                            cached_get_user_novels.clear()
+                            cached_get_latest_chapter_count.clear()
+                            st.success(f"「{novel['title']}」を削除しました。")
+                            st.rerun()
+                        st.error("削除に失敗しました。")
+                    except Exception as exc:
+                        st.error(f"削除中にエラーが発生しました: {exc}")
+
+
+def run_update_checks(novels):
+    """ホーム画面上で全作品を順番に確認し、カード用の結果を返す。"""
+    if not novels:
+        return []
+
+    cached_get_latest_chapter_count.clear()
+    progress_bar = st.progress(0)
+    status_text = st.empty()
+    results = []
+    total_novels = len(novels)
+
+    for index, novel in enumerate(novels):
+        status_text.text(
+            f"更新確認中: {novel['title']} ({index + 1}/{total_novels})"
+        )
+        try:
+            current_chapters = cached_get_latest_chapter_count(novel["url"])
+            saved_chapters = int(novel.get("latest_chapter") or 0)
+            has_update = current_chapters > saved_chapters
+            results.append({
+                "id": novel["id"],
+                "title": novel["title"],
+                "url": novel["url"],
+                "saved_chapters": saved_chapters,
+                "current_chapters": current_chapters,
+                "has_update": has_update,
+                "added": max(current_chapters - saved_chapters, 0),
+                "error": None,
+            })
+        except Exception as exc:
+            results.append({
+                "id": novel["id"],
+                "title": novel["title"],
+                "url": novel["url"],
+                "has_update": False,
+                "error": str(exc),
+            })
+        progress_bar.progress((index + 1) / total_novels)
+
+    progress_bar.empty()
+    status_text.empty()
+    return results
+
+
 def login_page():
     st.title("📚 Novel Downloader")
     st.subheader("ログイン")
@@ -167,6 +319,7 @@ def login_page():
                 cookies.save()
                 st.session_state.user_email = email_login
                 st.session_state.current_page = "dashboard"
+                st.session_state.pop("check_results", None)
                 st.rerun()
             else:
                 st.error("このメールアドレスは登録されていません")
@@ -191,6 +344,7 @@ def login_page():
                 cookies.save()
                 st.session_state.user_email = email_new
                 st.session_state.current_page = "dashboard"
+                st.session_state.pop("check_results", None)
                 st.rerun()
             else:
                 st.error(msg)
@@ -200,80 +354,99 @@ def login_page():
 
 def dashboard_page():
     """ダッシュボード"""
-    st.title("📚 ダッシュボード")
-    st.write(f"ログイン中: {st.session_state.user_email}")
-    
-    if st.button("ログアウト"):
-        st.session_state.user_email = None
-        st.session_state.current_page = "login"
-        cookies["user_email"] = ""
-        cookies.save()
-        st.success("ログアウトしました")
-        st.rerun()
-    
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        if st.button("📖 新規小説を追加"):
-            if "checked_latest_total" in st.session_state:
-                del st.session_state['checked_latest_total']
-            st.session_state.active_url = ""  # URL入力を空にする
+    inject_app_styles()
+
+    title_col, download_col = st.columns([5, 1.5], vertical_alignment="center")
+    with title_col:
+        st.markdown('<h1 class="library-title">📚 本棚</h1>', unsafe_allow_html=True)
+        st.caption(f"同期中: {st.session_state.user_email}")
+    with download_col:
+        if st.button("＋ ダウンロード", use_container_width=True, type="primary"):
+            st.session_state.pop("checked_latest_total", None)
+            st.session_state.active_url = ""
             st.session_state.current_page = "download_and_manage"
             st.rerun()
-    with col2:
-        if st.button("⚙️ 設定"):
-            st.session_state.current_page = "settings"
-            st.rerun()
-    with col3:
-        if st.button("🔄 全て更新チェック"):
-            st.session_state.current_page = "update_check"
-            st.rerun()
-    
-    st.divider()
-    st.subheader("登録済み小説")
+    with st.expander("設定・アカウント"):
+        account_col, settings_col, logout_col = st.columns([3, 1, 1])
+        with account_col:
+            st.write(st.session_state.user_email)
+        with settings_col:
+            if st.button("⚙️ 設定", use_container_width=True):
+                st.session_state.current_page = "settings"
+                st.rerun()
+        with logout_col:
+            if st.button("ログアウト", use_container_width=True):
+                st.session_state.user_email = None
+                st.session_state.current_page = "login"
+                st.session_state.pop("check_results", None)
+                cookies["user_email"] = ""
+                cookies.save()
+                st.rerun()
+
+    st.subheader("ダウンロード済み", divider="gray")
     novels = cached_get_user_novels(st.session_state.user_email)
     
     if not novels:
         st.info("登録済み小説がありません")
         return
-    
-    for novel in novels:
-        col1, col2, col3 = st.columns([2, 1, 1])
-        
-        with col1:
-            st.write(f"**{novel['title']}**")
-            st.caption(f"URL: {novel['url']}")
-            if novel.get('last_downloaded_at'):
-                st.caption(f"更新日: {novel['last_downloaded_at'][:10]}")
-            elif novel.get('registered_at'):
-                st.caption(f"更新日: {novel['registered_at'][:10]}")
-        
-        with col2:
-            if st.button("📥 ダウンロード / 管理", key=f"download_{novel['id']}"):
-                if "checked_latest_total" in st.session_state:
-                    del st.session_state["checked_latest_total"]
-                st.session_state.active_url = novel['url']  # 該当URLを渡す
-                st.session_state.current_page = "download_and_manage"
+
+    should_check_updates = (
+        st.session_state.get("check_results") is None
+        or st.session_state.pop("update_requested", False)
+    )
+    if should_check_updates:
+        with st.status("本棚を更新しています", expanded=True) as update_status:
+            st.session_state.check_results = run_update_checks(novels)
+            failures = sum(
+                1 for result in st.session_state.check_results
+                if result.get("error")
+            )
+            updates = sum(
+                1 for result in st.session_state.check_results
+                if result.get("has_update")
+            )
+            if failures:
+                update_status.update(
+                    label=f"更新確認完了：{updates}作品に更新、{failures}作品で失敗",
+                    state="error",
+                    expanded=False,
+                )
+            else:
+                update_status.update(
+                    label=f"更新確認完了：{updates}作品に更新があります",
+                    state="complete",
+                    expanded=False,
+                )
+
+    check_results = st.session_state.get("check_results") or []
+    if check_results:
+        updates = sum(1 for result in check_results if result.get("has_update"))
+        failures = sum(1 for result in check_results if result.get("error"))
+        summary_col, retry_col = st.columns([4, 1])
+        with summary_col:
+            if updates:
+                st.success(f"{updates}作品に更新があります。カードから作品を開いてください。")
+            elif not failures:
+                st.info("すべて最新です。")
+            if failures:
+                st.warning(f"{failures}作品の確認に失敗しました。時間を空けて再試行してください。")
+        with retry_col:
+            if st.button("再確認", use_container_width=True):
+                st.session_state.update_requested = True
                 st.rerun()
-        
-        with col3:
-            if st.button("🗑️ 削除", key=f"delete_novel_{novel['id']}"):
-                try:
-                    success = delete_novel(novel['id'])
-                    if success:
-                        st.success(f"「{novel['title']}」を削除しました。")
-                        cached_get_user_novels.clear()
-                        cached_get_latest_chapter_count.clear()
-                        st.rerun()
-                    else:
-                        st.error("削除に失敗しました。もう一度お試しください。")
-                except Exception as e:
-                    st.error(f"削除中にエラーが発生しました: {e}")
-        st.divider()
+    
+    for index in range(0, len(novels), 2):
+        left, right = st.columns(2, gap="large")
+        with left:
+            render_book_card(novels[index])
+        if index + 1 < len(novels):
+            with right:
+                render_book_card(novels[index + 1])
 
 
-def download_and_manage_page():
+def download_and_manage_page(update_only=False):
     """【統合版】ダウンロード＆小説管理ページ"""
-    st.title("📥 小説ダウンロード ＆ 管理")
+    st.title("🔄 作品を更新" if update_only else "📥 小説ダウンロード ＆ 管理")
     
     if st.button("← ダッシュボードに戻る"):
         st.session_state.current_page = "dashboard"
@@ -281,12 +454,16 @@ def download_and_manage_page():
         
     st.divider()
     
-    # URL入力欄（新規追加から来たら空、一覧から来たら自動入力）
-    url = st.text_input(
-        "小説URL",
-        value=st.session_state.active_url,
-        placeholder="https://ncode.syosetu.com/... or https://kakuyomu.jp/works/..."
-    ).strip()
+    # 新規追加では入力、更新専用画面では選択済み作品を固定表示する
+    if update_only:
+        url = st.session_state.active_url.strip()
+        st.caption(f"更新対象: {url}")
+    else:
+        url = st.text_input(
+            "小説URL",
+            value=st.session_state.active_url,
+            placeholder="https://ncode.syosetu.com/... or https://kakuyomu.jp/works/..."
+        ).strip()
     
     if not url:
         st.info("小説のURLを入力すると、ダウンロードおよび各種管理機能が利用可能になります。")
@@ -302,6 +479,10 @@ def download_and_manage_page():
                 break
                 
     is_already_registered = (matched_novel is not None)
+
+    if update_only and not is_already_registered:
+        st.error("更新対象の作品が本棚に見つかりません。ホームへ戻って選び直してください。")
+        return
     
     # 画面を2つのカラムに分ける
     col_info, col_dl = st.columns([1, 1])
@@ -367,14 +548,19 @@ def download_and_manage_page():
                 st.info(f"✅ 最新の状態です (保存済み: {saved_total}話)")
                 
         download_mode = st.radio(
-            "ダウンロード方法",
-            ["更新分のみ", "全話"] if is_already_registered else ["全話"],
-            horizontal=True
+            "作成方法",
+            ["追加分のみ取得（完全版EPUB）", "全話を再取得"]
+            if is_already_registered
+            else ["全話を取得"],
+            horizontal=True,
+            help=(
+                "最新版は保存済み本文を再利用し、新着話だけ取得して完全版EPUBを作ります。"
+            ),
         )
-        
-        disable_download = (is_already_registered and download_mode == "更新分のみ" and current_total <= saved_total)
-        if disable_download:
-            st.warning("更新がないため「更新分のみ」は選択できません。")
+
+        disable_download = False
+        if is_already_registered and current_total <= saved_total:
+            st.info("更新はありません。保存済み本文から完全版EPUBを再作成できます。")
             
         if st.button("📖 ダウンロード開始", disabled=disable_download):
             cover_path = None
@@ -399,15 +585,33 @@ def download_and_manage_page():
                 with st.spinner("EPUB生成中..."):
                     st.session_state.progress_bar = st.progress(0)
                     st.session_state.log_area = st.empty()
-                    
-                    start_episode = (saved_total + 1) if (is_already_registered and download_mode == "更新分のみ") else 1
+
+                    cached_chapters = []
+                    use_cache = (
+                        is_already_registered
+                        and download_mode == "追加分のみ取得（完全版EPUB）"
+                    )
+                    if use_cache:
+                        try:
+                            cached_chapters = get_cached_chapters(
+                                st.session_state.user_email,
+                                matched_novel["id"],
+                            )
+                        except Exception:
+                            st.warning(
+                                "本文キャッシュがまだ利用できないため、今回は全話を取得します。"
+                            )
+
+                    newly_fetched_chapters = []
                     
                     output_folder = create_epub(
                         url,
                         cover_path=cover_path,
                         progress_callback=progress,
                         log_callback=log,
-                        start_episode=start_episode
+                        start_episode=1,
+                        cached_episodes=cached_chapters,
+                        chapter_callback=newly_fetched_chapters.append,
                     )
                     
                 work_title = os.path.basename(output_folder)
@@ -435,12 +639,32 @@ def download_and_manage_page():
                         update_cover_image(novel_id, cover_bytes)
                         
                 if registration_success and novel_id is not None:
+                    if newly_fetched_chapters:
+                        try:
+                            upsert_cached_chapters(
+                                st.session_state.user_email,
+                                novel_id,
+                                newly_fetched_chapters,
+                            )
+                        except Exception as exc:
+                            st.warning(f"本文キャッシュの保存に失敗しました: {exc}")
+
                     epub_files = [f for f in os.listdir(output_folder) if f.endswith(".epub")]
                     cached_get_latest_chapter_count.clear()
                     actual_total = cached_get_latest_chapter_count(url)
                     
                     update_latest_chapter(novel_id, actual_total)
                     cached_get_user_novels.clear()
+
+                    # 更新完了後、ホームのラベルをその場で「最新」へ切り替える。
+                    for result in st.session_state.get("check_results") or []:
+                        if result.get("id") == novel_id:
+                            result["saved_chapters"] = actual_total
+                            result["current_chapters"] = actual_total
+                            result["has_update"] = False
+                            result["added"] = 0
+                            result["error"] = None
+                            break
                     
                     if cover_path and os.path.exists(cover_path):
                         os.unlink(cover_path)
@@ -480,97 +704,9 @@ def settings_page():
     st.divider()
 
 
-def update_check_page():
-    st.title("🔄 全て更新チェック")
-
-    if st.button("← ダッシュボードに戻る"):
-        # ダッシュボードに戻る時は一時保存データを削除して、次回また自動更新が走るようにする
-        st.session_state.pop("check_results", None)
-        st.session_state.current_page = "dashboard"
-        st.rerun()
-
-    st.divider()
-
-    # セッション状態の初期化
-    if "check_results" not in st.session_state:
-        st.session_state.check_results = None
-
-    # 【自動判別】まだ一時保存データがない場合は、ボタンを押さずに自動でチェックを開始する
-    if st.session_state.check_results is None:
-        novels = cached_get_user_novels(st.session_state.user_email)
-        if not novels:
-            st.info("登録済み小説がありません")
-            return
-
-        st.subheader("🔄 自動更新チェック中...")
-        progress_bar = st.progress(0)
-        status_text = st.empty()
-        total_novels = len(novels)
-        
-        # 毎回最新を取るためにキャッシュをクリア
-        cached_get_latest_chapter_count.clear()
-        results = []
-
-        # 自動でループ処理が走ります
-        for i, novel in enumerate(novels):
-            status_text.text(f"チェック中: {novel['title']} ({i+1}/{total_novels})")
-            try:
-                current_chapters = cached_get_latest_chapter_count(novel['url'])
-                has_update = current_chapters > novel['latest_chapter']
-                added = current_chapters - novel['latest_chapter'] if has_update else 0
-                
-                results.append({
-                    "id": novel["id"],
-                    "title": novel["title"],
-                    "url": novel["url"],
-                    "saved_chapters": novel["latest_chapter"],
-                    "current_chapters": current_chapters,
-                    "has_update": has_update,
-                    "added": added,
-                    "error": None
-                })
-            except Exception as e:
-                results.append({
-                    "id": novel["id"],
-                    "title": novel["title"],
-                    "url": novel["url"],
-                    "error": str(e)
-                })
-
-            progress_bar.progress((i + 1) / total_novels)
-            time.sleep(1)
-
-        progress_bar.empty()
-        status_text.empty()
-        
-        # 結果をセッションに保存して画面をリロード（これで下の【状態2】に移る）
-        st.session_state.check_results = results
-        st.rerun()
-
-    # 【状態2】すでにチェックが終わっている（情報がある）場合は、ループを通らずデータを使うだけ
-    st.subheader("更新チェック結果")
-    
-    # 手動で再チェックしたい時のためのボタンも一応配置
-    if st.button("🔄 再度チェックする"):
-        st.session_state.check_results = None
-        st.rerun()
-        
-    st.write("") # スペース用
-
-    for res in st.session_state.check_results:
-        if res.get("error"):
-            st.error(f"❌ **{res['title']}**: チェック失敗 - {res['error']}")
-        else:
-            if res["has_update"]:
-                st.success(f"📈 **{res['title']}**: {res['saved_chapters']}話 → {res['current_chapters']}話 (+{res['added']}話)")
-                
-                if st.button("📥 この作品の管理・DL画面へ", key=f"go_dl_{res['id']}"):
-                    st.session_state.active_url = res["url"]
-                    st.session_state.checked_latest_total = res["current_chapters"]
-                    st.session_state.current_page = "download_and_manage"
-                    st.rerun()
-            else:
-                st.info(f"✅ **{res['title']}**: 更新なし ({res['current_chapters']}話)")
+def update_novel_page():
+    """本棚の更新ラベルから開く、登録済み作品専用画面。"""
+    download_and_manage_page(update_only=True)
 
 
 # ページルーティング表示
@@ -582,7 +718,7 @@ elif st.session_state.current_page == "dashboard":
     dashboard_page()
 elif st.session_state.current_page == "download_and_manage":
     download_and_manage_page()
+elif st.session_state.current_page == "update_novel":
+    update_novel_page()
 elif st.session_state.current_page == "settings":
     settings_page()
-elif st.session_state.current_page == "update_check":
-    update_check_page()
