@@ -197,10 +197,13 @@ configure_networking(
 if st.session_state.user_email is None:
     saved_email = cookies.get("user_email")
     if saved_email:
-        user = cached_get_user_by_email(saved_email)
-        if user:
-            st.session_state.user_email = saved_email
-            st.session_state.current_page = "dashboard"
+        try:
+            user = cached_get_user_by_email(saved_email)
+            if user:
+                st.session_state.user_email = saved_email
+                st.session_state.current_page = "dashboard"
+        except Exception as exc:
+            st.session_state.login_connection_error = str(exc)
 
 
 def log(msg):
@@ -379,19 +382,32 @@ def login_page():
 
     if login_submitted:
         if email_login:
-            user = cached_get_user_by_email(email_login)
-            if user:
-                st.success("ログインしました")
-                cookies["user_email"] = email_login
-                cookies.save()
-                st.session_state.user_email = email_login
-                st.session_state.current_page = "dashboard"
-                st.session_state.pop("check_results", None)
-                st.rerun()
-            else:
-                st.error("このメールアドレスは登録されていません")
+            try:
+                user = cached_get_user_by_email(email_login)
+                if user:
+                    st.success("ログインしました")
+                    cookies["user_email"] = email_login
+                    cookies.save()
+                    st.session_state.user_email = email_login
+                    st.session_state.current_page = "dashboard"
+                    st.session_state.pop("check_results", None)
+                    st.session_state.pop("login_connection_error", None)
+                    st.rerun()
+                else:
+                    st.error("このメールアドレスは登録されていません")
+            except Exception:
+                st.error(
+                    "Supabaseへ接続できません。"
+                    "StreamlitのSecretsにあるURLとAPIキーを確認してください。"
+                )
         else:
             st.error("メールアドレスを入力してください")
+
+    if st.session_state.pop("login_connection_error", None):
+        st.warning(
+            "保存済みログインの確認時にSupabaseへ接続できませんでした。"
+            "URLとAPIキーを確認してください。"
+        )
 
     st.divider()
     st.subheader("新規登録")
@@ -880,5 +896,4 @@ elif st.session_state.current_page == "update_novel":
     update_novel_page()
 elif st.session_state.current_page == "settings":
     settings_page()
-
 

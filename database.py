@@ -1,4 +1,5 @@
 import os
+from collections.abc import Mapping
 from supabase import create_client, Client
 from datetime import datetime
 import base64
@@ -17,20 +18,32 @@ def get_supabase_client():
     try:
         import streamlit as st
         url = st.secrets.get("SUPABASE_URL") or SUPABASE_URL
-        key = (
-            st.secrets.get("SUPABASE_SECRET_KEY")
-            or st.secrets.get("SUPABASE_KEY")
-            or SUPABASE_SECRET_KEY
-            or SUPABASE_KEY
-        )
+        secret_key = st.secrets.get("SUPABASE_SECRET_KEY") or SUPABASE_SECRET_KEY
+        legacy_key = st.secrets.get("SUPABASE_KEY") or SUPABASE_KEY
     except:
         url = SUPABASE_URL
-        key = SUPABASE_SECRET_KEY or SUPABASE_KEY
+        secret_key = SUPABASE_SECRET_KEY
+        legacy_key = SUPABASE_KEY
 
-    if not url or not key:
+    if not url or not (secret_key or legacy_key):
         raise ValueError("SUPABASE_URL and SUPABASE_KEY environment variables are required")
 
-    return create_client(url, key)
+    last_error = None
+    keys = list(dict.fromkeys(
+        key for key in (secret_key, legacy_key) if key
+    ))
+    for key in keys:
+        try:
+            client = create_client(url, key)
+            # create_clientだけではキー不一致を検出できないため、軽い読取で確認する。
+            client.table("users").select("*").limit(1).execute()
+            return client
+        except Exception as exc:
+            last_error = exc
+
+    raise RuntimeError(
+        "Supabaseへ接続できません。URLとAPIキーの組み合わせを確認してください。"
+    ) from last_error
 
 # グローバルクライアント（ローカル実行用）
 supabase: Client = get_supabase_client()
@@ -40,7 +53,7 @@ def normalize_result_rows(data):
     """Supabase SDKの返却形式を、常に辞書のリストへ揃える。"""
     if data is None:
         return []
-    if isinstance(data, dict):
+    if isinstance(data, Mapping):
         nested = data.get("data")
         if isinstance(nested, (list, tuple)):
             data = nested
@@ -48,7 +61,15 @@ def normalize_result_rows(data):
             data = [data]
     if not isinstance(data, (list, tuple)):
         return []
-    return [dict(row) for row in data if isinstance(row, dict)]
+    rows = []
+    for row in data:
+        if isinstance(row, Mapping):
+            rows.append(dict(row))
+        elif hasattr(row, "model_dump"):
+            rows.append(row.model_dump())
+        elif hasattr(row, "dict") and callable(row.dict):
+            rows.append(row.dict())
+    return rows
 
 
 def create_tables():
@@ -79,14 +100,11 @@ def register_user(email: str):
 
 def get_user_by_email(email: str):
     """メールアドレスからユーザーを取得"""
-    try:
-        result = supabase.table("users").select("*").eq("email", email).execute()
-        rows = normalize_result_rows(result.data)
-        if rows:
-            return rows[0]
-        return None
-    except Exception as e:
-        return None
+    result = supabase.table("users").select("*").eq("email", email).execute()
+    rows = normalize_result_rows(result.data)
+    if rows:
+        return rows[0]
+    return None
 
 
 def get_user_novels(email: str):
