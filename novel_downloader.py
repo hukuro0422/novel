@@ -88,13 +88,20 @@ def create_session():
     session = PoliteSession()
 
     session.headers.update({
-        "User-Agent": "NovelDownloader/2.0 (personal EPUB reader)",
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/136.0.0.0 Safari/537.36"
+        ),
         "Accept": (
             "text/html,application/xhtml+xml,"
             "application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8"
         ),
         "Accept-Language": "ja,en-US;q=0.9,en;q=0.8",
+        "Cache-Control": "no-cache",
+        "Pragma": "no-cache",
         "Connection": "keep-alive",
+        "Upgrade-Insecure-Requests": "1",
         "Cookie": "over18=yes"
     })
 
@@ -103,7 +110,14 @@ def create_session():
 
 def get_soup(session, url, log_callback=None):
     try:
-        res = session.get(url)
+        request_headers = None
+        if "syosetu.com" in urlparse(url).netloc.lower():
+            # バックアップ版で安定していた「なろう」向けリクエスト情報。
+            request_headers = {
+                "Referer": "https://syosetu.com/",
+                "Origin": "https://syosetu.com",
+            }
+        res = session.get(url, headers=request_headers)
         validate_response(res, url)
 
         return BeautifulSoup(res.content, "html.parser")
@@ -846,4 +860,3 @@ def get_latest_chapter_count(url: str, log_callback=None) -> int:
 
     else:
         raise ValueError("対応していないURLです。なろう、またはカクヨムの作品URLを入力してください。")
-

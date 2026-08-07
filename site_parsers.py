@@ -82,7 +82,15 @@ def extract_narou_toc_entries(soup: BeautifulSoup) -> list[dict]:
 
 
 def find_narou_next_toc_url(soup: BeautifulSoup, current_url: str) -> str | None:
-    """複数形式のページャーから次の目次ページを見つける。"""
+    """バックアップ版の「次へ」判定を優先して次の目次ページを見つける。"""
+    legacy_next = soup.find(
+        "a",
+        string=lambda value: value and "次へ" in value,
+    )
+    if legacy_next is not None and legacy_next.get("href"):
+        return urljoin(current_url, legacy_next["href"])
+
+    # 表示文字が子要素へ分割された場合だけ、現在形式の判定へフォールバックする。
     candidates = [
         soup.select_one('a[rel="next"]'),
         soup.select_one("a.c-pager__item--next"),
@@ -106,3 +114,4 @@ def find_narou_next_toc_url(soup: BeautifulSoup, current_url: str) -> str | None
         ):
             return urljoin(current_url, anchor["href"])
     return None
+
