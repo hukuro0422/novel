@@ -3,9 +3,11 @@ import tempfile
 import os
 import zipfile
 import base64
+import html
 from io import BytesIO
 
 from novel_downloader import create_epub, get_latest_chapter_count
+from epub_builder import safe_filename, write_epub
 from networking import configure_networking
 from database import (
     get_user_by_email,
@@ -246,8 +248,32 @@ def inject_app_styles():
             color: rgba(128, 128, 128, 0.95);
             font-size: 0.85rem;
         }
+        [data-testid="stVerticalBlockBorderWrapper"]:has(.book-card-marker) {
+            height: 390px;
+            min-height: 390px;
+            overflow-y: auto;
+        }
+        .book-card-marker {
+            display: none;
+        }
+        .book-title {
+            height: 2.9em;
+            line-height: 1.45;
+            overflow: hidden;
+            display: -webkit-box;
+            -webkit-box-orient: vertical;
+            -webkit-line-clamp: 2;
+            font-size: 1.12rem;
+            font-weight: 700;
+            cursor: help;
+            overflow-wrap: anywhere;
+        }
         @media (max-width: 640px) {
             .block-container { padding: 1rem 0.8rem; }
+            [data-testid="stVerticalBlockBorderWrapper"]:has(.book-card-marker) {
+                height: 420px;
+                min-height: 420px;
+            }
         }
         </style>
         """,
@@ -265,9 +291,94 @@ def get_novel_site(novel):
     return "other"
 
 
+def get_default_cover_path(site):
+    """配置場所の新旧両方からサイト別デフォルト表紙を探す。"""
+    if site not in {"narou", "kakuyomu"}:
+        return None
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    filename = f"default_{site}.jpg"
+    candidates = [
+        os.path.join(base_dir, "images", filename),
+        os.path.join(base_dir, filename),
+        os.path.join(base_dir, "novel_web", "images", filename),
+    ]
+    return next((path for path in candidates if os.path.exists(path)), None)
+
+
+def build_cached_epub_archive(novel, cached_chapters):
+    """保存済み本文だけから従来形式のEPUB一式をZIPへまとめる。"""
+    if not cached_chapters:
+        return None
+
+    site = get_novel_site(novel)
+    site_name = {
+        "narou": "小説家になろう",
+        "kakuyomu": "カクヨム",
+        "other": "Web小説",
+    }[site]
+    title = str(novel.get("title") or "Novel")
+
+    volumes = []
+    volume_map = {}
+    for chapter in cached_chapters:
+        if not isinstance(chapter, dict) or not chapter.get("body_html"):
+            continue
+        volume_title = str(chapter.get("chapter_title") or title)
+        if volume_title not in volume_map:
+            volume_map[volume_title] = []
+            volumes.append((volume_title, volume_map[volume_title]))
+        volume_map[volume_title].append({
+            "id": chapter.get("episode_id"),
+            "title": chapter.get("title") or "無題",
+            "body": chapter.get("body_html") or "",
+        })
+
+    if not volumes:
+        return None
+
+    with tempfile.TemporaryDirectory() as folder:
+        cover_path = get_default_cover_path(site)
+        cover_data = novel.get("cover_image")
+        if cover_data:
+            try:
+                cover_path = os.path.join(folder, "cover.jpg")
+                with open(cover_path, "wb") as cover_file:
+                    cover_file.write(base64.b64decode(cover_data))
+            except Exception:
+                cover_path = get_default_cover_path(site)
+
+        epub_paths = []
+        for file_index, (volume_title, episodes) in enumerate(volumes, 1):
+            epub_path = write_epub(
+                title,
+                volume_title,
+                episodes,
+                file_index,
+                folder,
+                site_name,
+                cover_path,
+            )
+            if epub_path:
+                epub_paths.append(epub_path)
+
+        if not epub_paths:
+            return None
+
+        archive = BytesIO()
+        with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as zip_file:
+            for epub_path in epub_paths:
+                zip_file.write(epub_path, arcname=os.path.basename(epub_path))
+        return {
+            "data": archive.getvalue(),
+            "file_name": f"{safe_filename(title)}_キャッシュ版.zip",
+            "chapter_count": len(cached_chapters),
+        }
+
+
 def render_book_card(novel):
     """登録済み作品を表紙付きカードとして表示する。"""
     with st.container(border=True):
+        st.markdown('<div class="book-card-marker"></div>', unsafe_allow_html=True)
         cover_col, detail_col = st.columns([1, 2.2], vertical_alignment="center")
 
         with cover_col:
@@ -276,13 +387,30 @@ def render_book_card(novel):
                 try:
                     st.image(base64.b64decode(cover_data), use_container_width=True)
                 except Exception:
-                    st.caption("📕 表紙なし")
+                    default_cover = get_default_cover_path(get_novel_site(novel))
+                    if default_cover:
+                        st.image(default_cover, use_container_width=True)
+                    else:
+                        st.caption("📕 表紙なし")
             else:
-                st.markdown("### 📕")
-                st.caption("表紙なし")
+                default_cover = get_default_cover_path(get_novel_site(novel))
+                if default_cover:
+                    st.image(default_cover, use_container_width=True)
+                else:
+                    st.markdown("### 📕")
+                    st.caption("表紙なし")
 
         with detail_col:
-            st.markdown(f"#### {novel['title']}")
+            escaped_title = html.escape(str(novel.get("title") or "タイトル不明"))
+            title_attribute = html.escape(
+                str(novel.get("title") or "タイトル不明"),
+                quote=True,
+            )
+            st.markdown(
+                f'<div class="book-title" title="{title_attribute}">'
+                f"{escaped_title}</div>",
+                unsafe_allow_html=True,
+            )
             site_label = {
                 "narou": "🟦 小説家になろう",
                 "kakuyomu": "🟨 カクヨム",
@@ -319,16 +447,62 @@ def render_book_card(novel):
             elif update_result and update_result.get("error"):
                 st.caption("⚠ 更新確認に失敗")
 
-            if st.button(
-                "開く",
-                key=f"open_novel_{novel['id']}",
-                use_container_width=True,
-                type="primary",
-            ):
-                st.session_state.pop("checked_latest_total", None)
-                st.session_state.active_url = novel["url"]
-                st.session_state.current_page = "download_and_manage"
-                st.rerun()
+            open_col, cache_col = st.columns(2)
+            with open_col:
+                if st.button(
+                    "開く",
+                    key=f"open_novel_{novel['id']}",
+                    use_container_width=True,
+                    type="primary",
+                ):
+                    st.session_state.pop("checked_latest_total", None)
+                    st.session_state.active_url = novel["url"]
+                    st.session_state.current_page = "download_and_manage"
+                    st.rerun()
+            with cache_col:
+                if st.button(
+                    "再ダウンロード",
+                    key=f"prepare_cached_{novel['id']}",
+                    use_container_width=True,
+                    help="保存済み本文だけからEPUBを再作成します。",
+                ):
+                    try:
+                        cached_chapters = get_cached_chapters(
+                            st.session_state.user_email,
+                            novel["id"],
+                        )
+                        payload = build_cached_epub_archive(
+                            novel,
+                            cached_chapters,
+                        )
+                        if payload:
+                            st.session_state[
+                                f"cached_download_{novel['id']}"
+                            ] = payload
+                        else:
+                            st.warning(
+                                "本文キャッシュがありません。"
+                                "この作品を一度更新してから再試行してください。"
+                            )
+                    except Exception as exc:
+                        st.error(f"キャッシュ版の作成に失敗しました: {exc}")
+
+            cached_payload = st.session_state.get(
+                f"cached_download_{novel['id']}"
+            )
+            if cached_payload:
+                st.download_button(
+                    "⬇️ ZIPを保存",
+                    data=cached_payload["data"],
+                    file_name=cached_payload["file_name"],
+                    mime="application/zip",
+                    key=f"download_cached_{novel['id']}",
+                    use_container_width=True,
+                    help=(
+                        f"キャッシュ済み {cached_payload['chapter_count']}話を"
+                        "ZIPで保存します。"
+                    ),
+                )
 
             with st.popover("•••", use_container_width=True):
                 st.caption(novel["url"])
