@@ -255,6 +255,16 @@ def inject_app_styles():
     )
 
 
+def get_novel_site(novel):
+    """作品URLから本棚上のサイト区分を返す。"""
+    url = str(novel.get("url") or "").lower()
+    if "syosetu.com" in url:
+        return "narou"
+    if "kakuyomu.jp" in url:
+        return "kakuyomu"
+    return "other"
+
+
 def render_book_card(novel):
     """登録済み作品を表紙付きカードとして表示する。"""
     with st.container(border=True):
@@ -273,6 +283,12 @@ def render_book_card(novel):
 
         with detail_col:
             st.markdown(f"#### {novel['title']}")
+            site_label = {
+                "narou": "🟦 小説家になろう",
+                "kakuyomu": "🟨 カクヨム",
+                "other": "📖 その他",
+            }[get_novel_site(novel)]
+            st.caption(site_label)
             chapter_count = int(novel.get("latest_chapter") or 0)
             st.markdown(
                 f'<div class="book-meta">保存済み {chapter_count} 話</div>',
@@ -326,6 +342,32 @@ def render_book_card(novel):
                         st.error("削除に失敗しました。")
                     except Exception as exc:
                         st.error(f"削除中にエラーが発生しました: {exc}")
+
+
+def render_library_section(title, external_label, external_url, novels):
+    """サイト別の見出しと2列の作品カードを表示する。"""
+    title_col, link_col = st.columns([4, 1.6], vertical_alignment="center")
+    with title_col:
+        st.markdown(f"### {title}　`{len(novels)}冊`")
+    with link_col:
+        if external_url:
+            st.link_button(
+                external_label,
+                external_url,
+                use_container_width=True,
+            )
+
+    if not novels:
+        st.caption("このサイトの登録作品はまだありません。")
+        return
+
+    for index in range(0, len(novels), 2):
+        left, right = st.columns(2, gap="large")
+        with left:
+            render_book_card(novels[index])
+        if index + 1 < len(novels):
+            with right:
+                render_book_card(novels[index + 1])
 
 
 def run_update_checks(novels):
@@ -522,13 +564,37 @@ def dashboard_page():
                 st.session_state.update_requested = True
                 st.rerun()
     
-    for index in range(0, len(novels), 2):
-        left, right = st.columns(2, gap="large")
-        with left:
-            render_book_card(novels[index])
-        if index + 1 < len(novels):
-            with right:
-                render_book_card(novels[index + 1])
+    narou_novels = [
+        novel for novel in novels if get_novel_site(novel) == "narou"
+    ]
+    kakuyomu_novels = [
+        novel for novel in novels if get_novel_site(novel) == "kakuyomu"
+    ]
+    other_novels = [
+        novel for novel in novels if get_novel_site(novel) == "other"
+    ]
+
+    render_library_section(
+        "小説家になろう作品",
+        "「小説家になろう」へ ↗",
+        "https://syosetu.com/",
+        narou_novels,
+    )
+    st.divider()
+    render_library_section(
+        "カクヨム作品",
+        "「カクヨム」へ ↗",
+        "https://kakuyomu.jp/",
+        kakuyomu_novels,
+    )
+    if other_novels:
+        st.divider()
+        render_library_section(
+            "その他の作品",
+            "",
+            None,
+            other_novels,
+        )
 
 
 def download_and_manage_page(update_only=False):
@@ -896,4 +962,3 @@ elif st.session_state.current_page == "update_novel":
     update_novel_page()
 elif st.session_state.current_page == "settings":
     settings_page()
-
