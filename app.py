@@ -268,6 +268,9 @@ def inject_app_styles():
         .book-cover-marker {
             display: none;
         }
+        .library-row-marker {
+            display: none;
+        }
         .book-title {
             height: 2.9em;
             line-height: 1.45;
@@ -280,8 +283,21 @@ def inject_app_styles():
             cursor: help;
             overflow-wrap: anywhere;
         }
-        @media (max-width: 640px) {
+        @media (max-width: 768px) {
             .block-container { padding: 1rem 0.8rem; }
+            [data-testid="stHorizontalBlock"]:has(.library-row-marker) {
+                display: flex !important;
+                flex-direction: column !important;
+                flex-wrap: nowrap !important;
+                gap: 1rem !important;
+            }
+            [data-testid="stHorizontalBlock"]:has(.library-row-marker)
+            > [data-testid="stColumn"] {
+                flex: 1 1 100% !important;
+                width: 100% !important;
+                max-width: 100% !important;
+                min-width: 0 !important;
+            }
             [data-testid="stVerticalBlockBorderWrapper"]:has(.book-card-marker) {
                 height: 420px;
                 min-height: 420px;
@@ -584,6 +600,10 @@ def render_library_section(title, external_label, external_url, novels):
     for index in range(0, len(novels), 2):
         left, right = st.columns(2, gap="large")
         with left:
+            st.markdown(
+                '<div class="library-row-marker"></div>',
+                unsafe_allow_html=True,
+            )
             render_book_card(novels[index])
         if index + 1 < len(novels):
             with right:
