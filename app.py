@@ -5,6 +5,8 @@ import zipfile
 import base64
 import html
 from io import BytesIO
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
 from novel_downloader import create_epub, get_latest_chapter_count
 from epub_builder import safe_filename, write_epub
@@ -15,6 +17,7 @@ from database import (
     get_user_novels,
     register_novel,
     update_latest_chapter,
+    save_update_check_result,
     record_download,
     delete_novel,
     update_cover_image,
@@ -616,6 +619,14 @@ def run_update_checks(novels):
                 "added": max(current_chapters - saved_chapters, 0),
                 "error": None,
             })
+            try:
+                save_update_check_result(
+                    novel["id"],
+                    current_chapters=current_chapters,
+                )
+            except Exception:
+                # サイト側の確認結果は表示し、DB保存失敗で結果を重複させない。
+                pass
         except Exception as exc:
             results.append({
                 "id": novel["id"],
@@ -624,11 +635,82 @@ def run_update_checks(novels):
                 "has_update": False,
                 "error": str(exc),
             })
+            try:
+                save_update_check_result(
+                    novel["id"],
+                    error=exc,
+                )
+            except Exception:
+                # 更新確認自体のエラーを優先して表示する。
+                pass
         progress_bar.progress((index + 1) / total_novels)
 
     progress_bar.empty()
     status_text.empty()
     return results
+
+
+JAPAN_TIMEZONE = ZoneInfo("Asia/Tokyo")
+
+
+def japan_today_iso():
+    """Streamlit CloudのUTC設定に左右されない日本の日付を返す。"""
+    return datetime.now(JAPAN_TIMEZONE).date().isoformat()
+
+
+def checked_today_in_japan(novel):
+    """保存済みの自動確認が日本時間の今日行われたか判定する。"""
+    raw_value = novel.get("last_update_checked_at")
+    if not raw_value:
+        return False
+    try:
+        checked_at = datetime.fromisoformat(str(raw_value).replace("Z", "+00:00"))
+        if checked_at.tzinfo is None:
+            checked_at = checked_at.replace(tzinfo=timezone.utc)
+        return checked_at.astimezone(JAPAN_TIMEZONE).date().isoformat() == japan_today_iso()
+    except (TypeError, ValueError):
+        return False
+
+
+def result_from_saved_check(novel):
+    """novels行に保存した本日の確認結果をカード表示用へ戻す。"""
+    saved_chapters = int(novel.get("latest_chapter") or 0)
+    error = novel.get("update_check_error")
+    checked_latest = novel.get("checked_latest_chapter")
+    current_chapters = (
+        int(checked_latest) if checked_latest is not None else saved_chapters
+    )
+    return {
+        "id": novel["id"],
+        "title": novel.get("title") or "タイトル不明",
+        "url": novel.get("url") or "",
+        "saved_chapters": saved_chapters,
+        "current_chapters": current_chapters,
+        "has_update": not error and current_chapters > saved_chapters,
+        "added": max(current_chapters - saved_chapters, 0) if not error else 0,
+        "error": error,
+    }
+
+
+def load_or_run_daily_update_checks(novels):
+    """本日分はDBから再利用し、未確認作品だけ通信して結果を保存する。"""
+    saved_results = {}
+    unchecked_novels = []
+    for novel in novels:
+        if checked_today_in_japan(novel):
+            saved_results[novel["id"]] = result_from_saved_check(novel)
+        else:
+            unchecked_novels.append(novel)
+
+    if unchecked_novels:
+        for result in run_update_checks(unchecked_novels):
+            saved_results[result["id"]] = result
+
+    return [
+        saved_results[novel["id"]]
+        for novel in novels
+        if novel.get("id") in saved_results
+    ]
 
 
 def login_page():
@@ -736,13 +818,22 @@ def dashboard_page():
         st.info("登録済み小説がありません")
         return
 
+    manual_update_requested = st.session_state.pop("update_requested", False)
+    results_are_from_today = (
+        st.session_state.get("check_results_date") == japan_today_iso()
+    )
     should_check_updates = (
-        st.session_state.get("check_results") is None
-        or st.session_state.pop("update_requested", False)
+        manual_update_requested
+        or st.session_state.get("check_results") is None
+        or not results_are_from_today
     )
     if should_check_updates:
         with st.status("本棚を更新しています", expanded=True) as update_status:
-            st.session_state.check_results = run_update_checks(novels)
+            if manual_update_requested:
+                st.session_state.check_results = run_update_checks(novels)
+            else:
+                st.session_state.check_results = load_or_run_daily_update_checks(novels)
+            st.session_state.check_results_date = japan_today_iso()
             failures = sum(
                 1 for result in st.session_state.check_results
                 if result.get("error")
@@ -1027,6 +1118,13 @@ def download_and_manage_page(update_only=False):
                     actual_total = cached_get_latest_chapter_count(url)
                     
                     update_latest_chapter(novel_id, actual_total)
+                    try:
+                        save_update_check_result(
+                            novel_id,
+                            current_chapters=actual_total,
+                        )
+                    except Exception:
+                        pass
                     cached_get_user_novels.clear()
 
                     # 更新完了後、ホームのラベルをその場で「最新」へ切り替える。

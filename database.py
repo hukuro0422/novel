@@ -1,7 +1,7 @@
 import os
 from collections.abc import Mapping
 from supabase import create_client, Client
-from datetime import datetime
+from datetime import datetime, timezone
 import base64
 from io import BytesIO
 from dotenv import load_dotenv
@@ -219,6 +219,28 @@ def update_cover_image(novel_id: int, cover_image):
         return True
     except Exception as e:
         return False
+
+
+def save_update_check_result(
+    novel_id: int,
+    current_chapters=None,
+    error=None,
+):
+    """ホーム画面の更新確認結果を、再ログイン後も使えるよう保存する。"""
+    payload = {
+        "last_update_checked_at": datetime.now(timezone.utc).isoformat(),
+        "checked_latest_chapter": (
+            int(current_chapters) if current_chapters is not None else None
+        ),
+        "update_check_error": str(error)[:1000] if error else None,
+    }
+    result = (
+        supabase.table("novels")
+        .update(payload)
+        .eq("id", novel_id)
+        .execute()
+    )
+    return bool(result.data is not None)
 
 
 def get_cached_chapters(email: str, novel_id: int):
