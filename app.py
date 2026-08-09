@@ -19,6 +19,7 @@ from database import (
     delete_novel,
     update_cover_image,
     get_cached_chapters,
+    has_cached_chapters,
     upsert_cached_chapters,
 )
 from streamlit_cookies_manager import EncryptedCookieManager
@@ -41,6 +42,11 @@ def cached_get_user_novels(email):
 @st.cache_data(ttl=600)
 def cached_get_latest_chapter_count(url):
     return get_latest_chapter_count(url)
+
+
+@st.cache_data(ttl=300)
+def cached_has_chapter_cache(email, novel_id):
+    return has_cached_chapters(email, novel_id)
 
 
 def normalize_novel_rows(value):
@@ -256,6 +262,9 @@ def inject_app_styles():
         .book-card-marker {
             display: none;
         }
+        .book-cover-marker {
+            display: none;
+        }
         .book-title {
             height: 2.9em;
             line-height: 1.45;
@@ -273,6 +282,31 @@ def inject_app_styles():
             [data-testid="stVerticalBlockBorderWrapper"]:has(.book-card-marker) {
                 height: 420px;
                 min-height: 420px;
+            }
+            [data-testid="stHorizontalBlock"]:has(.book-cover-marker) {
+                display: flex !important;
+                flex-direction: row !important;
+                flex-wrap: nowrap !important;
+                align-items: flex-start !important;
+                gap: 0.75rem !important;
+            }
+            [data-testid="stHorizontalBlock"]:has(.book-cover-marker)
+            > [data-testid="stColumn"]:first-child {
+                flex: 0 0 34% !important;
+                width: 34% !important;
+                min-width: 0 !important;
+            }
+            [data-testid="stHorizontalBlock"]:has(.book-cover-marker)
+            > [data-testid="stColumn"]:last-child {
+                flex: 1 1 66% !important;
+                width: 66% !important;
+                min-width: 0 !important;
+            }
+            [data-testid="stHorizontalBlock"]:has(.book-cover-marker)
+            [data-testid="stImage"] img {
+                width: 100% !important;
+                max-height: 280px !important;
+                object-fit: cover !important;
             }
         }
         </style>
@@ -382,6 +416,10 @@ def render_book_card(novel):
         cover_col, detail_col = st.columns([1, 2.2], vertical_alignment="center")
 
         with cover_col:
+            st.markdown(
+                '<div class="book-cover-marker"></div>',
+                unsafe_allow_html=True,
+            )
             cover_data = novel.get("cover_image")
             if cover_data:
                 try:
@@ -460,48 +498,52 @@ def render_book_card(novel):
                     st.session_state.current_page = "download_and_manage"
                     st.rerun()
             with cache_col:
-                if st.button(
-                    "再ダウンロード",
-                    key=f"prepare_cached_{novel['id']}",
-                    use_container_width=True,
-                    help="保存済み本文だけからEPUBを再作成します。",
-                ):
-                    try:
-                        cached_chapters = get_cached_chapters(
-                            st.session_state.user_email,
-                            novel["id"],
-                        )
-                        payload = build_cached_epub_archive(
-                            novel,
-                            cached_chapters,
-                        )
-                        if payload:
-                            st.session_state[
-                                f"cached_download_{novel['id']}"
-                            ] = payload
-                        else:
-                            st.warning(
-                                "本文キャッシュがありません。"
-                                "この作品を一度更新してから再試行してください。"
-                            )
-                    except Exception as exc:
-                        st.error(f"キャッシュ版の作成に失敗しました: {exc}")
+                user_email = st.session_state.user_email
+                novel_snapshot = dict(novel)
+                try:
+                    cache_available = cached_has_chapter_cache(
+                        user_email,
+                        novel["id"],
+                    )
+                    cache_help = (
+                        "保存済み本文だけからEPUBを再作成して、"
+                        "そのままZIPをダウンロードします。"
+                        if cache_available
+                        else "本文キャッシュがありません。一度作品を更新してください。"
+                    )
+                except Exception:
+                    cache_available = False
+                    cache_help = "本文キャッシュの確認に失敗しました。"
 
-            cached_payload = st.session_state.get(
-                f"cached_download_{novel['id']}"
-            )
-            if cached_payload:
+                def generate_cached_zip():
+                    cached_chapters = get_cached_chapters(
+                        user_email,
+                        novel_snapshot["id"],
+                    )
+                    payload = build_cached_epub_archive(
+                        novel_snapshot,
+                        cached_chapters,
+                    )
+                    if not payload:
+                        raise RuntimeError(
+                            "本文キャッシュがありません。"
+                            "一度作品を更新してください。"
+                        )
+                    return payload["data"]
+
                 st.download_button(
-                    "⬇️ ZIPを保存",
-                    data=cached_payload["data"],
-                    file_name=cached_payload["file_name"],
+                    "再ダウンロード",
+                    data=generate_cached_zip,
+                    file_name=(
+                        f"{safe_filename(str(novel.get('title') or 'Novel'))}"
+                        "_キャッシュ版.zip"
+                    ),
                     mime="application/zip",
                     key=f"download_cached_{novel['id']}",
                     use_container_width=True,
-                    help=(
-                        f"キャッシュ済み {cached_payload['chapter_count']}話を"
-                        "ZIPで保存します。"
-                    ),
+                    help=cache_help,
+                    disabled=not cache_available,
+                    on_click="ignore",
                 )
 
             with st.popover("•••", use_container_width=True):
@@ -511,6 +553,7 @@ def render_book_card(novel):
                         if delete_novel(novel["id"]):
                             cached_get_user_novels.clear()
                             cached_get_latest_chapter_count.clear()
+                            cached_has_chapter_cache.clear()
                             st.success(f"「{novel['title']}」を削除しました。")
                             st.rerun()
                         st.error("削除に失敗しました。")
@@ -975,6 +1018,7 @@ def download_and_manage_page(update_only=False):
                                 novel_id,
                                 newly_fetched_chapters,
                             )
+                            cached_has_chapter_cache.clear()
                         except Exception as exc:
                             st.warning(f"本文キャッシュの保存に失敗しました: {exc}")
 

@@ -236,6 +236,19 @@ def get_cached_chapters(email: str, novel_id: int):
     return normalize_result_rows(result.data)
 
 
+def has_cached_chapters(email: str, novel_id: int) -> bool:
+    """本文を読み込まず、作品キャッシュが1件以上あるかだけ確認する。"""
+    result = (
+        supabase.table("novel_chapters")
+        .select("episode_id")
+        .eq("email", email)
+        .eq("novel_id", novel_id)
+        .limit(1)
+        .execute()
+    )
+    return bool(normalize_result_rows(result.data))
+
+
 def upsert_cached_chapters(email: str, novel_id: int, chapters):
     """取得した本文を小分けにupsertし、途中失敗時の影響を抑える。"""
     if not chapters:
