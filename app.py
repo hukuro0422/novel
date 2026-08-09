@@ -283,26 +283,26 @@ def inject_app_styles():
                 height: 420px;
                 min-height: 420px;
             }
-            [data-testid="stHorizontalBlock"]:has(.book-cover-marker) {
+            [data-testid="stHorizontalBlock"]:has(.book-cover-marker):not(:has([data-testid="stVerticalBlockBorderWrapper"])) {
                 display: flex !important;
                 flex-direction: row !important;
                 flex-wrap: nowrap !important;
                 align-items: flex-start !important;
                 gap: 0.75rem !important;
             }
-            [data-testid="stHorizontalBlock"]:has(.book-cover-marker)
+            [data-testid="stHorizontalBlock"]:has(.book-cover-marker):not(:has([data-testid="stVerticalBlockBorderWrapper"]))
             > [data-testid="stColumn"]:first-child {
                 flex: 0 0 34% !important;
                 width: 34% !important;
                 min-width: 0 !important;
             }
-            [data-testid="stHorizontalBlock"]:has(.book-cover-marker)
+            [data-testid="stHorizontalBlock"]:has(.book-cover-marker):not(:has([data-testid="stVerticalBlockBorderWrapper"]))
             > [data-testid="stColumn"]:last-child {
                 flex: 1 1 66% !important;
                 width: 66% !important;
                 min-width: 0 !important;
             }
-            [data-testid="stHorizontalBlock"]:has(.book-cover-marker)
+            [data-testid="stHorizontalBlock"]:has(.book-cover-marker):not(:has([data-testid="stVerticalBlockBorderWrapper"]))
             [data-testid="stImage"] img {
                 width: 100% !important;
                 max-height: 280px !important;
