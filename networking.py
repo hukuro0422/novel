@@ -39,11 +39,13 @@ def configure_networking(
     jitter: float,
     retries: int,
     backoff_factor: float,
+    narou_minimum_interval: float = 8.0,
 ) -> None:
     """画面で保存した通信設定を、このプロセスで作るSessionへ反映する。"""
     with _CONFIG_LOCK:
         _RUNTIME_CONFIG.update({
-            "minimum_interval": max(1.5, float(minimum_interval)),
+            "minimum_interval": max(3.0, float(minimum_interval)),
+            "narou_minimum_interval": max(5.0, float(narou_minimum_interval)),
             "jitter": max(0.0, float(jitter)),
             "retries": min(max(1, int(retries)), 5),
             "backoff_factor": max(0.5, float(backoff_factor)),
@@ -54,7 +56,10 @@ def get_networking_config() -> dict[str, float | int]:
     """現在有効な通信設定を返す。"""
     defaults = {
         "minimum_interval": max(
-            1.5, _env_float("NOVEL_REQUEST_INTERVAL", 2.5)
+            3.0, _env_float("NOVEL_REQUEST_INTERVAL", 4.0)
+        ),
+        "narou_minimum_interval": max(
+            5.0, _env_float("NAROU_REQUEST_INTERVAL", 8.0)
         ),
         "jitter": max(0.0, _env_float("NOVEL_REQUEST_JITTER", 0.75)),
         "retries": min(max(1, _env_int("NOVEL_REQUEST_RETRIES", 3)), 5),
@@ -88,6 +93,7 @@ class PoliteSession(requests.Session):
         jitter: float | None = None,
         retries: int | None = None,
         backoff_factor: float | None = None,
+        narou_minimum_interval: float | None = None,
         sleep: Callable[[float], None] = time.sleep,
     ) -> None:
         super().__init__()
@@ -103,6 +109,12 @@ class PoliteSession(requests.Session):
             jitter
             if jitter is not None
             else float(config["jitter"]),
+        )
+        self.narou_minimum_interval = max(
+            5.0,
+            narou_minimum_interval
+            if narou_minimum_interval is not None
+            else float(config["narou_minimum_interval"]),
         )
         retry_count = min(
             max(1, retries if retries is not None else int(config["retries"])),
@@ -121,7 +133,8 @@ class PoliteSession(requests.Session):
             read=retry_count,
             status=retry_count,
             backoff_factor=retry_backoff,
-            status_forcelist=(429, 500, 502, 503, 504),
+            # 制限応答を自動再試行すると悪化し得るため、403/429は即座に呼び出し側へ返す。
+            status_forcelist=(500, 502, 503, 504),
             allowed_methods=frozenset({"GET", "HEAD", "OPTIONS", "POST"}),
             respect_retry_after_header=True,
             raise_on_status=False,
@@ -138,7 +151,10 @@ class PoliteSession(requests.Session):
         with _HOST_RATE_LOCK:
             now = time.monotonic()
             last_request = _HOST_LAST_REQUEST_AT.get(host)
-            target_interval = self.minimum_interval + random.uniform(0.0, self.jitter)
+            site_interval = self.minimum_interval
+            if host == "syosetu.com" or host.endswith(".syosetu.com"):
+                site_interval = max(site_interval, self.narou_minimum_interval)
+            target_interval = site_interval + random.uniform(0.0, self.jitter)
             if last_request is not None:
                 remaining = target_interval - (now - last_request)
                 if remaining > 0:

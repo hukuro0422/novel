@@ -5,12 +5,10 @@ import zipfile
 import base64
 import html
 from io import BytesIO
-from datetime import datetime, timezone
-from zoneinfo import ZoneInfo
 
 from novel_downloader import create_epub, get_latest_chapter_count
 from epub_builder import safe_filename, write_epub
-from networking import configure_networking
+from networking import AccessRestrictedError, configure_networking
 from database import (
     get_user_by_email,
     register_user,
@@ -183,7 +181,11 @@ def cookie_number(key, default, cast, minimum, maximum):
 
 if "network_interval" not in st.session_state:
     st.session_state.network_interval = cookie_number(
-        "network_interval", 2.5, float, 1.5, 10.0
+        "network_interval", 4.0, float, 3.0, 15.0
+    )
+if "narou_interval" not in st.session_state:
+    st.session_state.narou_interval = cookie_number(
+        "narou_interval", 8.0, float, 5.0, 30.0
     )
 if "network_jitter" not in st.session_state:
     st.session_state.network_jitter = cookie_number(
@@ -203,6 +205,7 @@ configure_networking(
     st.session_state.network_jitter,
     st.session_state.network_retries,
     st.session_state.network_backoff,
+    st.session_state.narou_interval,
 )
 
 if st.session_state.user_email is None:
@@ -611,7 +614,7 @@ def render_library_section(title, external_label, external_url, novels):
 
 
 def run_update_checks(novels):
-    """ホーム画面上で全作品を順番に確認し、カード用の結果を返す。"""
+    """手動操作時だけ全作品を順番に確認し、カード用の結果を返す。"""
     if not novels:
         return []
 
@@ -620,8 +623,19 @@ def run_update_checks(novels):
     status_text = st.empty()
     results = []
     total_novels = len(novels)
+    restricted_sites = set()
 
     for index, novel in enumerate(novels):
+        site = get_novel_site(novel)
+        if site in restricted_sites:
+            skipped_result = result_from_saved_check(novel)
+            skipped_result["error"] = (
+                "同じサイトでアクセス制限を検出したため、通信せず確認を中止しました。"
+            )
+            results.append(skipped_result)
+            progress_bar.progress((index + 1) / total_novels)
+            continue
+
         status_text.text(
             f"更新確認中: {novel['title']} ({index + 1}/{total_novels})"
         )
@@ -647,6 +661,19 @@ def run_update_checks(novels):
             except Exception:
                 # サイト側の確認結果は表示し、DB保存失敗で結果を重複させない。
                 pass
+        except AccessRestrictedError as exc:
+            restricted_sites.add(site)
+            results.append({
+                "id": novel["id"],
+                "title": novel["title"],
+                "url": novel["url"],
+                "has_update": False,
+                "error": str(exc),
+            })
+            try:
+                save_update_check_result(novel["id"], error=exc)
+            except Exception:
+                pass
         except Exception as exc:
             results.append({
                 "id": novel["id"],
@@ -670,30 +697,8 @@ def run_update_checks(novels):
     return results
 
 
-JAPAN_TIMEZONE = ZoneInfo("Asia/Tokyo")
-
-
-def japan_today_iso():
-    """Streamlit CloudのUTC設定に左右されない日本の日付を返す。"""
-    return datetime.now(JAPAN_TIMEZONE).date().isoformat()
-
-
-def checked_today_in_japan(novel):
-    """保存済みの自動確認が日本時間の今日行われたか判定する。"""
-    raw_value = novel.get("last_update_checked_at")
-    if not raw_value:
-        return False
-    try:
-        checked_at = datetime.fromisoformat(str(raw_value).replace("Z", "+00:00"))
-        if checked_at.tzinfo is None:
-            checked_at = checked_at.replace(tzinfo=timezone.utc)
-        return checked_at.astimezone(JAPAN_TIMEZONE).date().isoformat() == japan_today_iso()
-    except (TypeError, ValueError):
-        return False
-
-
 def result_from_saved_check(novel):
-    """novels行に保存した本日の確認結果をカード表示用へ戻す。"""
+    """novels行に保存した前回の確認結果をカード表示用へ戻す。"""
     saved_chapters = int(novel.get("latest_chapter") or 0)
     error = novel.get("update_check_error")
     checked_latest = novel.get("checked_latest_chapter")
@@ -712,24 +717,12 @@ def result_from_saved_check(novel):
     }
 
 
-def load_or_run_daily_update_checks(novels):
-    """本日分はDBから再利用し、未確認作品だけ通信して結果を保存する。"""
-    saved_results = {}
-    unchecked_novels = []
-    for novel in novels:
-        if checked_today_in_japan(novel):
-            saved_results[novel["id"]] = result_from_saved_check(novel)
-        else:
-            unchecked_novels.append(novel)
-
-    if unchecked_novels:
-        for result in run_update_checks(unchecked_novels):
-            saved_results[result["id"]] = result
-
+def load_saved_update_checks(novels):
+    """外部サイトへ通信せず、Supabaseに保存済みの前回結果だけを返す。"""
     return [
-        saved_results[novel["id"]]
+        result_from_saved_check(novel)
         for novel in novels
-        if novel.get("id") in saved_results
+        if novel.get("last_update_checked_at")
     ]
 
 
@@ -839,21 +832,13 @@ def dashboard_page():
         return
 
     manual_update_requested = st.session_state.pop("update_requested", False)
-    results_are_from_today = (
-        st.session_state.get("check_results_date") == japan_today_iso()
-    )
-    should_check_updates = (
-        manual_update_requested
-        or st.session_state.get("check_results") is None
-        or not results_are_from_today
-    )
-    if should_check_updates:
+    if st.session_state.get("check_results") is None:
+        # ログイン・ホーム表示では外部サイトへ一切アクセスしない。
+        st.session_state.check_results = load_saved_update_checks(novels)
+
+    if manual_update_requested:
         with st.status("本棚を更新しています", expanded=True) as update_status:
-            if manual_update_requested:
-                st.session_state.check_results = run_update_checks(novels)
-            else:
-                st.session_state.check_results = load_or_run_daily_update_checks(novels)
-            st.session_state.check_results_date = japan_today_iso()
+            st.session_state.check_results = run_update_checks(novels)
             failures = sum(
                 1 for result in st.session_state.check_results
                 if result.get("error")
@@ -876,21 +861,23 @@ def dashboard_page():
                 )
 
     check_results = st.session_state.get("check_results") or []
-    if check_results:
-        updates = sum(1 for result in check_results if result.get("has_update"))
-        failures = sum(1 for result in check_results if result.get("error"))
-        summary_col, retry_col = st.columns([4, 1])
-        with summary_col:
+    summary_col, retry_col = st.columns([4, 1])
+    with summary_col:
+        if check_results:
+            updates = sum(1 for result in check_results if result.get("has_update"))
+            failures = sum(1 for result in check_results if result.get("error"))
             if updates:
                 st.success(f"{updates}作品に更新があります。カードから作品を開いてください。")
             elif not failures:
-                st.info("すべて最新です。")
+                st.info("前回の確認時点では、すべて最新です。")
             if failures:
-                st.warning(f"{failures}作品の確認に失敗しました。時間を空けて再試行してください。")
-        with retry_col:
-            if st.button("再確認", use_container_width=True):
-                st.session_state.update_requested = True
-                st.rerun()
+                st.warning(f"前回は{failures}作品の確認に失敗しました。再確認は時間を空けて行ってください。")
+        else:
+            st.info("保存済みの更新確認結果はありません。必要な時だけ再確認してください。")
+    with retry_col:
+        if st.button("再確認", use_container_width=True):
+            st.session_state.update_requested = True
+            st.rerun()
     
     narou_novels = [
         novel for novel in novels if get_novel_site(novel) == "narou"
@@ -1202,11 +1189,19 @@ def settings_page():
     with st.form("network_settings_form"):
         interval = st.slider(
             "最小アクセス間隔（秒）",
-            min_value=1.5,
-            max_value=10.0,
+            min_value=3.0,
+            max_value=15.0,
             value=float(st.session_state.network_interval),
             step=0.5,
-            help="各ページへアクセスする前に最低限待つ時間です。推奨は2.5秒以上です。",
+            help="小説家になろう以外へアクセスする前に待つ最低時間です。",
+        )
+        narou_interval = st.slider(
+            "小説家になろうの最小アクセス間隔（秒）",
+            min_value=5.0,
+            max_value=30.0,
+            value=float(st.session_state.narou_interval),
+            step=1.0,
+            help="小説家になろうには、この専用の長い間隔を必ず適用します。推奨は8秒以上です。",
         )
         jitter = st.slider(
             "ランダム待機時間（最大秒）",
@@ -1237,34 +1232,38 @@ def settings_page():
 
     if saved:
         st.session_state.network_interval = interval
+        st.session_state.narou_interval = narou_interval
         st.session_state.network_jitter = jitter
         st.session_state.network_retries = retries
         st.session_state.network_backoff = backoff
         cookies["network_interval"] = str(interval)
+        cookies["narou_interval"] = str(narou_interval)
         cookies["network_jitter"] = str(jitter)
         cookies["network_retries"] = str(retries)
         cookies["network_backoff"] = str(backoff)
         cookies.save()
-        configure_networking(interval, jitter, retries, backoff)
+        configure_networking(interval, jitter, retries, backoff, narou_interval)
         cached_get_latest_chapter_count.clear()
         st.success("アクセス設定を保存しました。次の通信から反映されます。")
 
     st.info(
-        "おすすめ: 最小間隔 2.5秒、ランダム待機 0.75秒、"
-        "再試行 3回、待機倍率 1.5"
+        "おすすめ: 通常4秒、小説家になろう8秒、ランダム待機1秒、"
+        "再試行2回、待機倍率2.0"
     )
 
     if st.button("おすすめ設定に戻す", use_container_width=True):
-        st.session_state.network_interval = 2.5
-        st.session_state.network_jitter = 0.75
-        st.session_state.network_retries = 3
-        st.session_state.network_backoff = 1.5
-        cookies["network_interval"] = "2.5"
-        cookies["network_jitter"] = "0.75"
-        cookies["network_retries"] = "3"
-        cookies["network_backoff"] = "1.5"
+        st.session_state.network_interval = 4.0
+        st.session_state.narou_interval = 8.0
+        st.session_state.network_jitter = 1.0
+        st.session_state.network_retries = 2
+        st.session_state.network_backoff = 2.0
+        cookies["network_interval"] = "4.0"
+        cookies["narou_interval"] = "8.0"
+        cookies["network_jitter"] = "1.0"
+        cookies["network_retries"] = "2"
+        cookies["network_backoff"] = "2.0"
         cookies.save()
-        configure_networking(2.5, 0.75, 3, 1.5)
+        configure_networking(4.0, 1.0, 2, 2.0, 8.0)
         cached_get_latest_chapter_count.clear()
         st.rerun()
 
