@@ -69,3 +69,38 @@ class SiteParserTests(unittest.TestCase):
             find_narou_next_toc_url(soup, "https://ncode.syosetu.com/n1234ab/"),
             "https://ncode.syosetu.com/n1234ab/?p=2",
         )
+
+    def test_narou_body_extracts_illustrations(self):
+        soup = BeautifulSoup(
+            """
+            <div id="novel_honbun">
+              <div class="js-novel-text"><p>本文1</p></div>
+              <div class="novelview_image">
+                <a href="https://example.com/view"><img src="//1234.mitemin.net/userpageimage/viewimagebig/icode/123/" alt="挿絵"></a>
+              </div>
+              <div class="js-novel-text"><p>本文2</p></div>
+            </div>
+            """,
+            "html.parser",
+        )
+        body = extract_narou_body(soup)
+        self.assertIn('<p class="illustration"><img src="https://1234.mitemin.net/userpageimage/viewimagebig/icode/123/"/></p>', body)
+        self.assertIn("<p>本文1</p>", body)
+        self.assertIn("<p>本文2</p>", body)
+
+    def test_kakuyomu_body_extracts_illustrations(self):
+        soup = BeautifulSoup(
+            """
+            <div class="widget-episodeBody">
+              <p>段落1</p>
+              <p><img src="https://kakuyomu.jp/images/illust.jpg" alt="挿絵"></p>
+              <p>段落2</p>
+            </div>
+            """,
+            "html.parser",
+        )
+        body = extract_kakuyomu_body(soup)
+        self.assertIn('<p class="illustration"><img src="https://kakuyomu.jp/images/illust.jpg"/></p>', body)
+        self.assertIn("<p>段落1</p>", body)
+        self.assertIn("<p>段落2</p>", body)
+

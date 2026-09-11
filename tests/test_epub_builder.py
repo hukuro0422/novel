@@ -42,3 +42,40 @@ class EpubBuilderTests(unittest.TestCase):
                 self.assertEqual(len(episode_files), 2)
                 first_episode = archive.read(episode_files[0]).decode("utf-8")
                 self.assertIn("一話 &lt;開始&gt;", first_episode)
+
+    def test_generated_epub_embeds_illustrations(self):
+        from PIL import Image
+
+        with tempfile.TemporaryDirectory() as directory:
+            dummy_img_path = Path(directory) / "test_illust.png"
+            img = Image.new("RGBA", (100, 100), (255, 0, 0, 128))
+            img.save(dummy_img_path, format="PNG")
+
+            output = write_epub(
+                main_title="挿絵テスト作品",
+                volume_title="第一章",
+                episodes=[
+                    {
+                        "id": "1",
+                        "title": "挿絵のある回",
+                        "body": f'<p>テキスト前</p><p class="illustration"><img src="{dummy_img_path.as_posix()}" alt="テスト挿絵"/></p><p>テキスト後</p>',
+                    }
+                ],
+                file_index=1,
+                folder_path=directory,
+                site_name="テスト",
+            )
+
+            self.assertTrue(Path(output).exists())
+            with zipfile.ZipFile(output) as archive:
+                names = archive.namelist()
+                image_files = [n for n in names if "images/illust_" in n]
+                self.assertEqual(len(image_files), 1)
+                self.assertTrue(image_files[0].endswith(".jpg"))
+
+                episode_files = [n for n in names if "/episodes/" in n]
+                content = archive.read(episode_files[0]).decode("utf-8")
+                self.assertIn('src="../images/illust_0001.jpg"', content)
+                self.assertIn("テキスト前", content)
+                self.assertIn("テキスト後", content)
+

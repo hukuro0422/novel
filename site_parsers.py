@@ -8,7 +8,18 @@ from urllib.parse import urljoin
 from bs4 import BeautifulSoup, Tag
 
 
-def _container_to_paragraphs(container: Tag | None) -> str:
+def _clean_img_url(src: str, base_url: str = "") -> str:
+    src = (src or "").strip()
+    if not src:
+        return ""
+    if src.startswith("//"):
+        return f"https:{src}"
+    if base_url:
+        return urljoin(base_url, src)
+    return src
+
+
+def _container_to_paragraphs(container: Tag | None, base_url: str = "") -> str:
     if container is None:
         return ""
 
@@ -19,33 +30,77 @@ def _container_to_paragraphs(container: Tag | None) -> str:
         ruby.unwrap()
 
     paragraphs = []
-    for paragraph in container.find_all("p"):
-        text = paragraph.get_text(strip=True)
-        if text:
-            paragraphs.append(f"<p>{html.escape(text)}</p>")
+    processed_img_ids = set()
+
+    for element in container.find_all(["p", "div", "figure", "img"]):
+        if getattr(element, "attrs", None) is None:
+            continue
+
+        classes = set(element.get("class", []))
+        if element.name == "div" and "novelview_image" not in classes:
+            continue
+
+        if element.name == "p":
+            for img in element.find_all("img"):
+                processed_img_ids.add(id(img))
+                src = _clean_img_url(img.get("src", ""), base_url)
+                if src:
+                    paragraphs.append(f'<p class="illustration"><img src="{html.escape(src)}"/></p>')
+
+            if element.find("img"):
+                text = "".join(s.strip() for s in element.strings if getattr(s.parent, "name", None) != "img")
+            else:
+                text = element.get_text(strip=True)
+
+            if text:
+                paragraphs.append(f"<p>{html.escape(text)}</p>")
+
+        elif element.name in ("div", "figure") and ("novelview_image" in classes or element.name == "figure"):
+            for img in element.find_all("img"):
+                if id(img) not in processed_img_ids:
+                    processed_img_ids.add(id(img))
+                    src = _clean_img_url(img.get("src", ""), base_url)
+                    if src:
+                        paragraphs.append(f'<p class="illustration"><img src="{html.escape(src)}"/></p>')
+
+        elif element.name == "img":
+            if id(element) not in processed_img_ids:
+                processed_img_ids.add(id(element))
+                src = _clean_img_url(element.get("src", ""), base_url)
+                if src:
+                    paragraphs.append(f'<p class="illustration"><img src="{html.escape(src)}"/></p>')
+
     return "".join(paragraphs)
 
 
-def extract_kakuyomu_body(soup: BeautifulSoup) -> str:
+def extract_kakuyomu_body(soup: BeautifulSoup, base_url: str = "") -> str:
     """カクヨムのエピソード本文を取得する。"""
     body = (
         soup.select_one(".widget-episodeBody")
         or soup.select_one(".js-episode-body")
     )
-    return _container_to_paragraphs(body)
+    return _container_to_paragraphs(body, base_url)
 
 
-def extract_narou_body(soup: BeautifulSoup) -> str:
-    """なろう本文を取得し、従来仕様どおり前書き・後書きは除外する。"""
+def extract_narou_body(soup: BeautifulSoup, base_url: str = "") -> str:
+    """なろう本文を取得し、従来仕様どおり前書き・後書きは除外して本文と挿絵を抽出する。"""
+    body_container = soup.select_one("#novel_honbun, .p-novel__body")
+    if body_container:
+        for preface in body_container.select(".p-novel__text--preface, .novel_p"):
+            preface.decompose()
+        for afterword in body_container.select(".p-novel__text--afterword, .novel_a"):
+            afterword.decompose()
+        return _container_to_paragraphs(body_container, base_url)
+
     parts = []
-    for block in soup.find_all("div", class_="js-novel-text"):
+    for block in soup.find_all("div", class_=["js-novel-text", "novelview_image"]):
         classes = set(block.get("class", []))
         if {
             "p-novel__text--preface",
             "p-novel__text--afterword",
         } & classes:
             continue
-        parts.append(_container_to_paragraphs(block))
+        parts.append(_container_to_paragraphs(block, base_url))
     return "".join(parts)
 
 

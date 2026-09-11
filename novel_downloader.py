@@ -139,7 +139,8 @@ def save_epub(
     file_idx,
     folder_path,
     site_name,
-    cover_path=None
+    cover_path=None,
+    session=None,
 ):
     return write_epub(
         main_title=main_title,
@@ -149,6 +150,7 @@ def save_epub(
         folder_path=folder_path,
         site_name=site_name,
         cover_path=cover_path,
+        session=session,
     )
 
 
@@ -334,7 +336,7 @@ def create_epub(
 
             if ep_soup:
 
-                content = extract_kakuyomu_body(ep_soup)
+                content = extract_kakuyomu_body(ep_soup, ep_url)
 
                 if content:
 
@@ -379,7 +381,8 @@ def create_epub(
                         file_idx,
                         book_folder,
                         "カクヨム",
-                        cover_path
+                        cover_path,
+                        session=session
                     )
 
                     file_idx += 1
@@ -408,7 +411,8 @@ def create_epub(
                 file_idx,
                 book_folder,
                 "カクヨム",
-                cover_path
+                cover_path,
+                session=session
             )
 
         return book_folder
@@ -535,7 +539,7 @@ def create_epub(
 
             if ep_soup:
 
-                html = extract_narou_body(ep_soup)
+                html = extract_narou_body(ep_soup, ep_url)
 
                 if not html:
                     if log_callback:
@@ -583,7 +587,8 @@ def create_epub(
                         file_idx,
                         book_folder,
                         "小説家になろう",
-                        cover_path
+                        cover_path,
+                        session=session
                     )
 
                     file_idx += 1
@@ -612,7 +617,8 @@ def create_epub(
                 file_idx,
                 book_folder,
                 "小説家になろう",
-                cover_path
+                cover_path,
+                session=session
             )
 
     return book_folder
