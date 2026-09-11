@@ -15,10 +15,16 @@ def process_cover_image(uploaded_file: BinaryIO | None) -> str | None:
     if uploaded_file is None:
         return None
 
-    suffix = os.path.splitext(getattr(uploaded_file, "name", "cover.jpg"))[1] or ".jpg"
-    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
+    # 拡張子は常に .jpg で保存する
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".jpg")
 
     img = Image.open(uploaded_file)
+    try:
+        from PIL import ImageOps
+        img = ImageOps.exif_transpose(img)
+    except Exception:
+        pass
+
     target_width = 480
     target_height = 800
 

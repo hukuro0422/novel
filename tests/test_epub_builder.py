@@ -76,6 +76,34 @@ class EpubBuilderTests(unittest.TestCase):
                 episode_files = [n for n in names if "/episodes/" in n]
                 content = archive.read(episode_files[0]).decode("utf-8")
                 self.assertIn('src="../images/illust_0001.jpg"', content)
+                self.assertIn('class="illustration-page"', content)
                 self.assertIn("テキスト前", content)
                 self.assertIn("テキスト後", content)
+
+                css_content = archive.read("EPUB/styles/book.css").decode("utf-8")
+                self.assertIn("page-break-before: always", css_content)
+                self.assertIn("writing-mode: horizontal-tb", css_content)
+
+    def test_cover_image_always_saved_as_cover_jpg(self):
+        from PIL import Image
+
+        with tempfile.TemporaryDirectory() as directory:
+            dummy_cover_png = Path(directory) / "my_custom_cover.png"
+            img = Image.new("RGBA", (100, 100), (0, 0, 255, 255))
+            img.save(dummy_cover_png, format="PNG")
+
+            output = write_epub(
+                main_title="表紙テスト作品",
+                volume_title="第一章",
+                episodes=[{"id": "1", "title": "一話", "body": "<p>本文</p>"}],
+                file_index=1,
+                folder_path=directory,
+                site_name="テスト",
+                cover_path=str(dummy_cover_png),
+            )
+
+            with zipfile.ZipFile(output) as archive:
+                names = archive.namelist()
+                self.assertIn("EPUB/cover.jpg", names)
+                self.assertNotIn("EPUB/cover.png", names)
 

@@ -55,9 +55,9 @@ def safe_filename(value: str, fallback: str = "novel") -> str:
 
 
 def sanitize_body_html(body_html: str) -> str:
-    """EPUB本文として必要な最小限の要素だけを残す。挿絵のimgタグはsrc/altを保持する。"""
+    """EPUB本文として必要な最小限の要素だけを残す。挿絵のimgタグや改ページdivは保持する。"""
     soup = BeautifulSoup(body_html or "", "html.parser")
-    allowed_tags = {"p", "br", "em", "strong", "ruby", "rt", "rp", "img"}
+    allowed_tags = {"p", "br", "em", "strong", "ruby", "rt", "rp", "img", "div"}
 
     for tag in list(soup.find_all(True)):
         if tag.name in {"script", "style"}:
@@ -68,6 +68,12 @@ def sanitize_body_html(body_html: str) -> str:
             continue
         if tag.name == "img":
             tag.attrs = {k: v for k, v in tag.attrs.items() if k in {"src", "alt"}}
+        elif tag.name in {"p", "div"} and tag.get("class"):
+            classes = [c for c in tag.get("class", []) if c in {"illustration", "illustration-page"}]
+            if classes:
+                tag.attrs = {"class": " ".join(classes)}
+            else:
+                tag.attrs = {}
         else:
             tag.attrs = {}
 
@@ -107,8 +113,32 @@ def write_epub(
     body { font-family: serif; padding: 1em; line-height: 1.9; }
     h1 { text-align: center; line-height: 1.5; margin: 1.5em 0 2em; }
     p { text-indent: 1em; margin: 0.55em 0; }
-    p.illustration { text-indent: 0; text-align: center; margin: 1.5em 0; }
-    img { max-width: 100%; height: auto; display: block; margin: 0 auto; }
+
+    /* 挿絵ページ（改ページ・中央揃え・横向き防止） */
+    div.illustration-page, p.illustration {
+        page-break-before: always;
+        page-break-after: always;
+        break-before: page;
+        break-after: page;
+        text-align: center;
+        text-indent: 0 !important;
+        margin: 0 auto;
+        padding: 0;
+        writing-mode: horizontal-tb;
+        -webkit-writing-mode: horizontal-tb;
+        display: block;
+    }
+    div.illustration-page img, p.illustration img, img.illustration {
+        max-width: 100%;
+        max-height: 100%;
+        height: auto;
+        width: auto;
+        object-fit: contain;
+        display: block;
+        margin: 0 auto;
+        page-break-inside: avoid;
+        break-inside: avoid;
+    }
     """
     css = epub.EpubItem(
         uid="book-style",
@@ -119,11 +149,23 @@ def write_epub(
     book.add_item(css)
 
     if cover_path and os.path.exists(cover_path):
-        extension = Path(cover_path).suffix.lower()
-        if extension not in {".jpg", ".jpeg", ".png"}:
-            extension = ".jpg"
         with open(cover_path, "rb") as cover_file:
-            book.set_cover(f"cover{extension}", cover_file.read())
+            cover_bytes = cover_file.read()
+
+        # 表紙画像は常にJPEGフォーマットに統一し、ファイル名を cover.jpg に固定する
+        try:
+            from PIL import Image, ImageOps
+            import io
+            with Image.open(io.BytesIO(cover_bytes)) as c_img:
+                c_img = ImageOps.exif_transpose(c_img)
+                if c_img.format != "JPEG" or c_img.mode not in ("RGB", "L"):
+                    buf = io.BytesIO()
+                    c_img.convert("RGB").save(buf, format="JPEG", quality=85)
+                    cover_bytes = buf.getvalue()
+        except Exception:
+            pass
+
+        book.set_cover("cover.jpg", cover_bytes)
 
     image_cache: dict[str, str] = {}
     image_counter = 0
@@ -165,6 +207,14 @@ def write_epub(
             resolved_src = image_cache[src]
             if resolved_src:
                 img_tag["src"] = resolved_src
+                # 親要素が p や div でテキストを含まない場合は、改ページ用の div.illustration-page に置き換える
+                parent = img_tag.parent
+                if parent and parent.name in {"p", "div"} and not parent.get_text(strip=True):
+                    parent.name = "div"
+                    parent["class"] = "illustration-page"
+                else:
+                    wrapper = body_soup.new_tag("div", attrs={"class": "illustration-page"})
+                    img_tag.wrap(wrapper)
             else:
                 img_tag.decompose()
 
