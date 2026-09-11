@@ -91,16 +91,13 @@ def create_session():
         "User-Agent": (
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
             "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/136.0.0.0 Safari/537.36"
+            "Chrome/131.0.0.0 Safari/537.36"
         ),
         "Accept": (
-            "text/html,application/xhtml+xml,"
-            "application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8"
+            "text/html,application/xhtml+xml,application/xml;q=0.9,"
+            "image/avif,image/webp,*/*;q=0.8"
         ),
         "Accept-Language": "ja,en-US;q=0.9,en;q=0.8",
-        "Cache-Control": "no-cache",
-        "Pragma": "no-cache",
-        "Connection": "keep-alive",
         "Upgrade-Insecure-Requests": "1",
         "Cookie": "over18=yes"
     })
@@ -108,16 +105,16 @@ def create_session():
     return session
 
 
-def get_soup(session, url, log_callback=None):
+def get_soup(session, url, log_callback=None, referer=None):
     try:
-        request_headers = None
-        if "syosetu.com" in urlparse(url).netloc.lower():
-            # バックアップ版で安定していた「なろう」向けリクエスト情報。
-            request_headers = {
-                "Referer": "https://syosetu.com/",
-                "Origin": "https://syosetu.com",
-            }
-        res = session.get(url, headers=request_headers)
+        request_headers = {}
+        if referer:
+            request_headers["Referer"] = referer
+        elif "syosetu.com" in urlparse(url).netloc.lower():
+            # GETリクエストにOriginは付けない。Refererのみ設定する。
+            request_headers["Referer"] = "https://syosetu.com/"
+
+        res = session.get(url, headers=request_headers if request_headers else None)
         validate_response(res, url)
 
         return BeautifulSoup(res.content, "html.parser")
@@ -624,7 +621,26 @@ def create_epub(
     return book_folder
 
 
-def _get_narou_episode_count_from_top_page(soup, top_url):
+def _fetch_narou_chapter_count_via_api(novel_code: str, session: requests.Session | None = None) -> int | None:
+    """なろう公式APIから掲載話数（general_all_no）を高速かつ安全に取得する（目次スクレイピング不要）。"""
+    try:
+        client = session or requests
+        api_url = f"https://api.syosetu.com/novelapi/api/?out=json&ncode={novel_code}&of=ga-nt"
+        res = client.get(api_url, timeout=10)
+        if res.status_code == 200:
+            data = res.json()
+            if isinstance(data, list) and len(data) >= 2:
+                info = data[1]
+                if "general_all_no" in info:
+                    return int(info["general_all_no"])
+                if info.get("novel_type") == 2:
+                    return 1
+    except Exception:
+        pass
+    return None
+
+
+def _get_narou_episode_count_from_top_page(soup, top_url, session=None):
     """
     小説家になろうの全話数を取得する。
     目次が複数ページに分かれていてもすべて数える。
@@ -632,7 +648,7 @@ def _get_narou_episode_count_from_top_page(soup, top_url):
     if not soup:
         return 0
 
-    session = create_session()
+    client = session or create_session()
     episode_urls = set()
     current_url = top_url
     current_soup = soup
@@ -654,7 +670,7 @@ def _get_narou_episode_count_from_top_page(soup, top_url):
         next_page_url = find_narou_next_toc_url(current_soup, current_url)
         if next_page_url:
             current_url = next_page_url
-            current_soup = get_soup(session, current_url)
+            current_soup = get_soup(client, current_url)
             time.sleep(0.2)
         else:
             current_url = None
@@ -740,12 +756,19 @@ def get_latest_chapter_count(url: str, log_callback=None) -> int:
 
     if site_type == "narou":
         top_url = normalize_narou_url(url)
+        novel_code = urlparse(top_url).path.strip("/").split("/")[0]
 
         if log_callback:
-            log_callback("小説家になろうの最新章数を取得中")
+            log_callback("小説家になろうの話数を確認中")
 
+        # 1. まず公式APIで確認（スクレイピング不要、bot判定リスク0）
+        api_count = _fetch_narou_chapter_count_via_api(novel_code, session)
+        if api_count is not None and api_count > 0:
+            return api_count
+
+        # 2. APIで取れない場合のみ目次HTML解析へフォールバック
         soup = get_soup(session, top_url, log_callback)
-        count = _get_narou_episode_count_from_top_page(soup, top_url)
+        count = _get_narou_episode_count_from_top_page(soup, top_url, session=session)
         if count > 0:
             return count
 
