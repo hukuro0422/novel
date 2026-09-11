@@ -817,10 +817,10 @@ def get_latest_chapter_count(url: str, log_callback=None) -> int:
 
     elif site_type == "kakuyomu":
         top_url = normalize_kakuyomu_url(url)
+        work_id = extract_kakuyomu_work_id_from_url(top_url) or top_url.rstrip("/").split("/")[-1]
 
-        internal_id = _get_kakuyomu_internal_work_id(top_url, session, log_callback)
-        if internal_id:
-            count = _get_kakuyomu_episode_count_from_graphql(internal_id, session, log_callback)
+        if work_id and work_id.isdigit():
+            count = _get_kakuyomu_episode_count_from_graphql(work_id, session, log_callback)
             if count > 0:
                 return count
 
@@ -889,3 +889,148 @@ def get_latest_chapter_count(url: str, log_callback=None) -> int:
 
     else:
         raise ValueError("対応していないURLです。なろう、またはカクヨムの作品URLを入力してください。")
+
+
+def extract_kakuyomu_work_id_from_url(url: str) -> str | None:
+    """カクヨムURLから作品ID（数字列）を直接抽出する。"""
+    match = re.search(r"/works/(\d+)", url or "")
+    return match.group(1) if match else None
+
+
+def extract_narou_ncode_from_url(url: str) -> str | None:
+    """なろうURLからNコード（nXXXXXX）を抽出する。"""
+    match = re.search(r"/([nN]\d+[a-zA-Z]+)/?", url or "")
+    return match.group(1).lower() if match else None
+
+
+def fetch_latest_chapter_counts_batch(
+    novels: list[dict],
+    session: requests.Session | None = None,
+    log_callback=None,
+) -> dict[int | str, dict]:
+    """
+    登録された複数作品の最新話数を、サイトごとに一括バッチAPI（合計1〜2回の超軽量通信）で高速取得する。
+    返却値: {novel_id: {"latest_chapter": int | None, "error": str | None}}
+    """
+    client = session or create_session()
+    results: dict[int | str, dict] = {}
+
+    narou_items: list[tuple[dict, str]] = []
+    kakuyomu_items: list[tuple[dict, str]] = []
+    other_items: list[dict] = []
+
+    for novel in novels:
+        url = novel.get("url", "")
+        site = detect_site(url)
+        nid = novel.get("id")
+
+        if site == "narou":
+            ncode = extract_narou_ncode_from_url(url)
+            if ncode:
+                narou_items.append((novel, ncode))
+            else:
+                other_items.append(novel)
+        elif site == "kakuyomu":
+            work_id = extract_kakuyomu_work_id_from_url(url)
+            if work_id:
+                kakuyomu_items.append((novel, work_id))
+            else:
+                other_items.append(novel)
+        else:
+            other_items.append(novel)
+
+    # 1. 小説家になろう: 公式APIで一括取得（ハイフン区切りで最大500件）
+    if narou_items:
+        if log_callback:
+            log_callback(f"なろう作品（{len(narou_items)}件）を一括確認中")
+        batch_size = 50
+        for i in range(0, len(narou_items), batch_size):
+            chunk = narou_items[i:i + batch_size]
+            ncodes_param = "-".join(ncode for _, ncode in chunk)
+            try:
+                api_url = f"https://api.syosetu.com/novelapi/api/?out=json&ncode={ncodes_param}&of=ga-n-nt"
+                res = client.get(api_url, timeout=15)
+                if res.status_code == 200:
+                    data = res.json()
+                    ncode_map = {}
+                    if isinstance(data, list) and len(data) > 1:
+                        for item in data[1:]:
+                            code = str(item.get("ncode", "")).lower()
+                            count = int(
+                                item.get("general_all_no")
+                                or (1 if item.get("novel_type") == 2 else 0)
+                            )
+                            ncode_map[code] = count
+
+                    for novel, ncode in chunk:
+                        nid = novel.get("id")
+                        if ncode in ncode_map:
+                            results[nid] = {"latest_chapter": ncode_map[ncode], "error": None}
+                        else:
+                            # APIで見つからない場合（削除済み/非公開等）はフォールバック
+                            try:
+                                count = get_latest_chapter_count(novel.get("url", ""), log_callback=log_callback)
+                                results[nid] = {"latest_chapter": count, "error": None}
+                            except Exception as exc:
+                                results[nid] = {"latest_chapter": None, "error": str(exc)}
+                else:
+                    for novel, _ in chunk:
+                        results[novel.get("id")] = {"latest_chapter": None, "error": f"なろうAPI応答エラー ({res.status_code})"}
+            except Exception as exc:
+                for novel, _ in chunk:
+                    results[novel.get("id")] = {"latest_chapter": None, "error": str(exc)}
+
+    # 2. カクヨム: GraphQL API で一括取得（ids 配列で一撃送信）
+    if kakuyomu_items:
+        if log_callback:
+            log_callback(f"カクヨム作品（{len(kakuyomu_items)}件）を一括確認中")
+        batch_size = 50
+        for i in range(0, len(kakuyomu_items), batch_size):
+            chunk = kakuyomu_items[i:i + batch_size]
+            ids = [work_id for _, work_id in chunk]
+            query = """
+            query GetWorks($ids: [ID!]!) {
+              works(ids: $ids) {
+                id
+                publicEpisodeCount
+              }
+            }
+            """
+            try:
+                res = client.post(
+                    "https://kakuyomu.jp/graphql",
+                    json={"query": query, "variables": {"ids": ids}},
+                    headers={"Content-Type": "application/json"},
+                    timeout=15,
+                )
+                if res.status_code == 200:
+                    data = res.json()
+                    works = data.get("data", {}).get("works") or []
+                    work_map = {str(w.get("id")): int(w.get("publicEpisodeCount") or 0) for w in works if w}
+                    for novel, work_id in chunk:
+                        nid = novel.get("id")
+                        if work_id in work_map:
+                            results[nid] = {"latest_chapter": work_map[work_id], "error": None}
+                        else:
+                            try:
+                                count = get_latest_chapter_count(novel.get("url", ""), log_callback=log_callback)
+                                results[nid] = {"latest_chapter": count, "error": None}
+                            except Exception as exc:
+                                results[nid] = {"latest_chapter": None, "error": str(exc)}
+                else:
+                    for novel, _ in chunk:
+                        results[novel.get("id")] = {"latest_chapter": None, "error": f"カクヨムAPI応答エラー ({res.status_code})"}
+            except Exception as exc:
+                for novel, _ in chunk:
+                    results[novel.get("id")] = {"latest_chapter": None, "error": str(exc)}
+
+    # 3. その他のサイト
+    for novel in other_items:
+        nid = novel.get("id")
+        try:
+            count = get_latest_chapter_count(novel.get("url", ""), log_callback=log_callback)
+            results[nid] = {"latest_chapter": count, "error": None}
+        except Exception as exc:
+            results[nid] = {"latest_chapter": None, "error": str(exc)}
+
+    return results

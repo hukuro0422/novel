@@ -6,7 +6,12 @@ import base64
 import html
 from io import BytesIO
 
-from novel_downloader import create_epub, get_latest_chapter_count, create_session
+from novel_downloader import (
+    create_epub,
+    get_latest_chapter_count,
+    create_session,
+    fetch_latest_chapter_counts_batch,
+)
 from epub_builder import safe_filename, write_epub
 from image_processor import process_cover_image
 from networking import AccessRestrictedError, configure_networking
@@ -566,85 +571,59 @@ def render_library_section(title, external_label, external_url, novels):
 
 
 def run_update_checks(novels):
-    """手動操作時だけ全作品を順番に確認し、カード用の結果を返す。"""
+    """手動操作時、全作品の話数を一括バッチAPI（合計1〜2回の超軽量通信）で超高速確認する。"""
     if not novels:
         return []
 
     cached_get_latest_chapter_count.clear()
-    progress_bar = st.progress(0)
     status_text = st.empty()
+    status_text.text("登録作品の最新話数を一括確認中...")
+
+    session = create_session()
+    batch_results = fetch_latest_chapter_counts_batch(novels, session=session)
+
     results = []
-    total_novels = len(novels)
-    restricted_sites = set()
+    for novel in novels:
+        nid = novel["id"]
+        res = batch_results.get(nid, {})
+        current_chapters = res.get("latest_chapter")
+        error_msg = res.get("error")
 
-    for index, novel in enumerate(novels):
-        site = get_novel_site(novel)
-        if site in restricted_sites:
-            skipped_result = result_from_saved_check(novel)
-            skipped_result["error"] = (
-                "同じサイトでアクセス制限を検出したため、通信せず確認を中止しました。"
-            )
-            results.append(skipped_result)
-            progress_bar.progress((index + 1) / total_novels)
-            continue
+        saved_chapters = int(novel.get("latest_chapter") or 0)
+        has_update = bool(current_chapters is not None and current_chapters > saved_chapters)
 
-        status_text.text(
-            f"更新確認中: {novel['title']} ({index + 1}/{total_novels})"
-        )
-        try:
-            current_chapters = cached_get_latest_chapter_count(novel["url"])
-            saved_chapters = int(novel.get("latest_chapter") or 0)
-            has_update = current_chapters > saved_chapters
+        if error_msg:
             results.append({
-                "id": novel["id"],
+                "id": nid,
+                "title": novel["title"],
+                "url": novel["url"],
+                "has_update": False,
+                "error": error_msg,
+            })
+            try:
+                save_update_check_result(nid, error=error_msg)
+            except Exception:
+                pass
+        else:
+            added = max((current_chapters or 0) - saved_chapters, 0)
+            results.append({
+                "id": nid,
                 "title": novel["title"],
                 "url": novel["url"],
                 "saved_chapters": saved_chapters,
                 "current_chapters": current_chapters,
                 "has_update": has_update,
-                "added": max(current_chapters - saved_chapters, 0),
+                "added": added,
                 "error": None,
             })
             try:
                 save_update_check_result(
-                    novel["id"],
+                    nid,
                     current_chapters=current_chapters,
                 )
             except Exception:
-                # サイト側の確認結果は表示し、DB保存失敗で結果を重複させない。
                 pass
-        except AccessRestrictedError as exc:
-            restricted_sites.add(site)
-            results.append({
-                "id": novel["id"],
-                "title": novel["title"],
-                "url": novel["url"],
-                "has_update": False,
-                "error": str(exc),
-            })
-            try:
-                save_update_check_result(novel["id"], error=exc)
-            except Exception:
-                pass
-        except Exception as exc:
-            results.append({
-                "id": novel["id"],
-                "title": novel["title"],
-                "url": novel["url"],
-                "has_update": False,
-                "error": str(exc),
-            })
-            try:
-                save_update_check_result(
-                    novel["id"],
-                    error=exc,
-                )
-            except Exception:
-                # 更新確認自体のエラーを優先して表示する。
-                pass
-        progress_bar.progress((index + 1) / total_novels)
 
-    progress_bar.empty()
     status_text.empty()
     return results
 
