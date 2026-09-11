@@ -134,17 +134,26 @@ def cookie_number(key, default, cast, minimum, maximum):
     return min(max(value, minimum), maximum)
 
 
+# 旧デフォルト（4.0 / 8.0）が残っていたら新デフォルト（0.5 / 1.0）へ自動移行
+saved_interval = cookies.get("network_interval")
+saved_narou_interval = cookies.get("narou_interval")
+if saved_interval in ("4.0", "4", None) and saved_narou_interval in ("8.0", "8", None):
+    cookies["network_interval"] = "0.5"
+    cookies["narou_interval"] = "1.0"
+    cookies["network_jitter"] = "0.2"
+    cookies.save()
+
 if "network_interval" not in st.session_state:
     st.session_state.network_interval = cookie_number(
-        "network_interval", 4.0, float, 3.0, 15.0
+        "network_interval", 0.5, float, 0.2, 15.0
     )
 if "narou_interval" not in st.session_state:
     st.session_state.narou_interval = cookie_number(
-        "narou_interval", 8.0, float, 5.0, 30.0
+        "narou_interval", 1.0, float, 0.5, 30.0
     )
 if "network_jitter" not in st.session_state:
     st.session_state.network_jitter = cookie_number(
-        "network_jitter", 0.75, float, 0.0, 3.0
+        "network_jitter", 0.2, float, 0.0, 3.0
     )
 if "network_retries" not in st.session_state:
     st.session_state.network_retries = cookie_number(
@@ -1120,26 +1129,26 @@ def settings_page():
     with st.form("network_settings_form"):
         interval = st.slider(
             "最小アクセス間隔（秒）",
-            min_value=3.0,
+            min_value=0.2,
             max_value=15.0,
             value=float(st.session_state.network_interval),
-            step=0.5,
-            help="小説家になろう以外へアクセスする前に待つ最低時間です。",
+            step=0.1,
+            help="カクヨムなど小説家になろう以外へアクセスする前に待つ最低時間です。",
         )
         narou_interval = st.slider(
             "小説家になろうの最小アクセス間隔（秒）",
-            min_value=5.0,
+            min_value=0.5,
             max_value=30.0,
             value=float(st.session_state.narou_interval),
-            step=1.0,
-            help="小説家になろうには、この専用の長い間隔を必ず適用します。推奨は8秒以上です。",
+            step=0.5,
+            help="小説家になろうにアクセスする前に待つ最低時間です。推奨は1.0秒以上です。",
         )
         jitter = st.slider(
             "ランダム待機時間（最大秒）",
             min_value=0.0,
             max_value=3.0,
             value=float(st.session_state.network_jitter),
-            step=0.25,
+            step=0.1,
             help="一定間隔にならないよう、最小間隔へランダムに加える時間です。",
         )
         retries = st.slider(
@@ -1178,23 +1187,23 @@ def settings_page():
         st.success("アクセス設定を保存しました。次の通信から反映されます。")
 
     st.info(
-        "おすすめ: 通常4秒、小説家になろう8秒、ランダム待機1秒、"
-        "再試行2回、待機倍率2.0"
+        "おすすめ: 通常0.5秒、小説家になろう1.0秒、ランダム待機0.2秒、"
+        "再試行2回、待機倍率1.5"
     )
 
     if st.button("おすすめ設定に戻す", use_container_width=True):
-        st.session_state.network_interval = 4.0
-        st.session_state.narou_interval = 8.0
-        st.session_state.network_jitter = 1.0
+        st.session_state.network_interval = 0.5
+        st.session_state.narou_interval = 1.0
+        st.session_state.network_jitter = 0.2
         st.session_state.network_retries = 2
-        st.session_state.network_backoff = 2.0
-        cookies["network_interval"] = "4.0"
-        cookies["narou_interval"] = "8.0"
-        cookies["network_jitter"] = "1.0"
+        st.session_state.network_backoff = 1.5
+        cookies["network_interval"] = "0.5"
+        cookies["narou_interval"] = "1.0"
+        cookies["network_jitter"] = "0.2"
         cookies["network_retries"] = "2"
-        cookies["network_backoff"] = "2.0"
+        cookies["network_backoff"] = "1.5"
         cookies.save()
-        configure_networking(4.0, 1.0, 2, 2.0, 8.0)
+        configure_networking(0.5, 0.2, 2, 1.5, 1.0)
         cached_get_latest_chapter_count.clear()
         st.rerun()
 
