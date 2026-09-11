@@ -39,13 +39,13 @@ def configure_networking(
     jitter: float,
     retries: int,
     backoff_factor: float,
-    narou_minimum_interval: float = 8.0,
+    narou_minimum_interval: float = 1.0,
 ) -> None:
     """画面で保存した通信設定を、このプロセスで作るSessionへ反映する。"""
     with _CONFIG_LOCK:
         _RUNTIME_CONFIG.update({
-            "minimum_interval": max(3.0, float(minimum_interval)),
-            "narou_minimum_interval": max(5.0, float(narou_minimum_interval)),
+            "minimum_interval": max(0.2, float(minimum_interval)),
+            "narou_minimum_interval": max(0.5, float(narou_minimum_interval)),
             "jitter": max(0.0, float(jitter)),
             "retries": min(max(1, int(retries)), 5),
             "backoff_factor": max(0.5, float(backoff_factor)),
@@ -56,12 +56,12 @@ def get_networking_config() -> dict[str, float | int]:
     """現在有効な通信設定を返す。"""
     defaults = {
         "minimum_interval": max(
-            3.0, _env_float("NOVEL_REQUEST_INTERVAL", 4.0)
+            0.2, _env_float("NOVEL_REQUEST_INTERVAL", 0.5)
         ),
         "narou_minimum_interval": max(
-            5.0, _env_float("NAROU_REQUEST_INTERVAL", 8.0)
+            0.5, _env_float("NAROU_REQUEST_INTERVAL", 1.0)
         ),
-        "jitter": max(0.0, _env_float("NOVEL_REQUEST_JITTER", 0.75)),
+        "jitter": max(0.0, _env_float("NOVEL_REQUEST_JITTER", 0.2)),
         "retries": min(max(1, _env_int("NOVEL_REQUEST_RETRIES", 3)), 5),
         "backoff_factor": max(
             0.5, _env_float("NOVEL_REQUEST_BACKOFF", 1.5)
@@ -111,7 +111,7 @@ class PoliteSession(requests.Session):
             else float(config["jitter"]),
         )
         self.narou_minimum_interval = max(
-            5.0,
+            0.5,
             narou_minimum_interval
             if narou_minimum_interval is not None
             else float(config["narou_minimum_interval"]),

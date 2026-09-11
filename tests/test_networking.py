@@ -31,3 +31,14 @@ class ValidateResponseTests(unittest.TestCase):
         result = response(200)
         validate_response(result, "https://example.test/work")
         result.raise_for_status.assert_called_once_with()
+
+
+class NetworkingConfigTests(unittest.TestCase):
+    def test_interval_defaults(self):
+        from networking import get_networking_config, PoliteSession
+        config = get_networking_config()
+        self.assertLessEqual(config["minimum_interval"], 0.5)
+        self.assertLessEqual(config["narou_minimum_interval"], 1.0)
+        session = PoliteSession()
+        self.assertLessEqual(session.minimum_interval, 0.5)
+        self.assertLessEqual(session.narou_minimum_interval, 1.0)
