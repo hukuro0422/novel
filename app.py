@@ -163,6 +163,17 @@ if "network_backoff" not in st.session_state:
     st.session_state.network_backoff = cookie_number(
         "network_backoff", 1.5, float, 0.5, 5.0
     )
+if "illustration_rotation" not in st.session_state:
+    st.session_state.illustration_rotation = cookie_number(
+        "illustration_rotation", 90, int, 0, 270
+    )
+
+ROTATION_OPTIONS = {
+    90: "左に90度回転（xteink x4 縦読み用・推奨）",
+    0: "回転なし（通常）",
+    270: "右に90度回転",
+    180: "180度回転",
+}
 
 configure_networking(
     st.session_state.network_interval,
@@ -923,7 +934,10 @@ def download_and_manage_page(update_only=False):
         # 登録済みかつ表紙が新たに選ばれた場合、その場での単体更新ボタンを表示
         if is_already_registered and cover:
             if st.button("表紙画像のみを今すぐ更新"):
-                processed_path = process_cover_image(cover)
+                processed_path = process_cover_image(
+                    cover,
+                    rotation=st.session_state.illustration_rotation,
+                )
                 if processed_path and os.path.exists(processed_path):
                     with open(processed_path, "rb") as f:
                         processed_bytes = BytesIO(f.read())
@@ -968,6 +982,25 @@ def download_and_manage_page(update_only=False):
             ),
         )
 
+        rotation_options_keys = list(ROTATION_OPTIONS.keys())
+        current_rotation = st.session_state.get("illustration_rotation", 90)
+        default_rot_idx = (
+            rotation_options_keys.index(current_rotation)
+            if current_rotation in rotation_options_keys
+            else 0
+        )
+        selected_rotation = st.selectbox(
+            "挿絵・表紙の回転（電子ペーパー向け）",
+            options=rotation_options_keys,
+            index=default_rot_idx,
+            format_func=lambda k: ROTATION_OPTIONS[k],
+            help="xteink x4などで横書き設定＋本体を傾けて縦読みする場合、「左に90度回転」を選択すると挿絵が正しい向きで表示されます。",
+        )
+        if selected_rotation != st.session_state.illustration_rotation:
+            st.session_state.illustration_rotation = selected_rotation
+            cookies["illustration_rotation"] = str(selected_rotation)
+            cookies.save()
+
         disable_download = False
         if is_already_registered and current_total <= saved_total:
             st.info("更新はありません。保存済み本文から完全版EPUBを再作成できます。")
@@ -978,7 +1011,7 @@ def download_and_manage_page(update_only=False):
             
             # 表紙の処理
             if cover:
-                cover_path = process_cover_image(cover)
+                cover_path = process_cover_image(cover, rotation=selected_rotation)
                 if cover_path and os.path.exists(cover_path):
                     with open(cover_path, "rb") as f:
                         cover_bytes = BytesIO(f.read())
@@ -1022,6 +1055,7 @@ def download_and_manage_page(update_only=False):
                         start_episode=1,
                         cached_episodes=cached_chapters,
                         chapter_callback=newly_fetched_chapters.append,
+                        illustration_rotation=selected_rotation,
                     )
                     
                 work_title = os.path.basename(output_folder)
@@ -1206,6 +1240,32 @@ def settings_page():
         configure_networking(0.5, 0.2, 2, 1.5, 1.0)
         cached_get_latest_chapter_count.clear()
         st.rerun()
+
+    st.divider()
+    st.subheader("端末・EPUB表示設定")
+    st.caption(
+        "電子ペーパー端末（xteink x4など）で横書き設定のまま本体を傾けて縦読みする場合、"
+        "挿絵を左90度回転させて埋め込むことで正しい向きで読めます。"
+    )
+    rotation_keys = list(ROTATION_OPTIONS.keys())
+    current_rot = st.session_state.get("illustration_rotation", 90)
+    current_rot_idx = (
+        rotation_keys.index(current_rot)
+        if current_rot in rotation_keys
+        else 0
+    )
+    new_rot = st.selectbox(
+        "デフォルトの挿絵・表紙の回転",
+        options=rotation_keys,
+        index=current_rot_idx,
+        format_func=lambda k: ROTATION_OPTIONS[k],
+        key="settings_illustration_rotation",
+    )
+    if new_rot != st.session_state.illustration_rotation:
+        st.session_state.illustration_rotation = new_rot
+        cookies["illustration_rotation"] = str(new_rot)
+        cookies.save()
+        st.success("表示設定を保存しました。")
 
     st.divider()
     st.subheader("アカウント")

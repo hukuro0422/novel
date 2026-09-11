@@ -138,6 +138,7 @@ def save_epub(
     site_name,
     cover_path=None,
     session=None,
+    illustration_rotation=0,
 ):
     return write_epub(
         main_title=main_title,
@@ -148,6 +149,7 @@ def save_epub(
         site_name=site_name,
         cover_path=cover_path,
         session=session,
+        illustration_rotation=illustration_rotation,
     )
 
 
@@ -159,6 +161,7 @@ def create_epub(
     start_episode=1,
     cached_episodes=None,
     chapter_callback=None,
+    illustration_rotation=0,
 ):
     session = create_session()
 
@@ -379,7 +382,8 @@ def create_epub(
                         book_folder,
                         "カクヨム",
                         cover_path,
-                        session=session
+                        session=session,
+                        illustration_rotation=illustration_rotation,
                     )
 
                     file_idx += 1
@@ -409,7 +413,8 @@ def create_epub(
                 book_folder,
                 "カクヨム",
                 cover_path,
-                session=session
+                session=session,
+                illustration_rotation=illustration_rotation,
             )
 
         return book_folder
@@ -585,7 +590,8 @@ def create_epub(
                         book_folder,
                         "小説家になろう",
                         cover_path,
-                        session=session
+                        session=session,
+                        illustration_rotation=illustration_rotation,
                     )
 
                     file_idx += 1
@@ -615,7 +621,8 @@ def create_epub(
                 book_folder,
                 "小説家になろう",
                 cover_path,
-                session=session
+                session=session,
+                illustration_rotation=illustration_rotation,
             )
 
     return book_folder

@@ -10,7 +10,7 @@ from typing import BinaryIO
 from PIL import Image
 
 
-def process_cover_image(uploaded_file: BinaryIO | None) -> str | None:
+def process_cover_image(uploaded_file: BinaryIO | None, rotation: int = 0) -> str | None:
     """アップロードされた表紙画像を480x800にリサイズ・中央クロップ・白黒化して一時ファイルに保存する。"""
     if uploaded_file is None:
         return None
@@ -24,6 +24,13 @@ def process_cover_image(uploaded_file: BinaryIO | None) -> str | None:
         img = ImageOps.exif_transpose(img)
     except Exception:
         pass
+
+    if rotation == 90:
+        img = img.transpose(Image.Transpose.ROTATE_90)
+    elif rotation == 270:
+        img = img.transpose(Image.Transpose.ROTATE_270)
+    elif rotation == 180:
+        img = img.transpose(Image.Transpose.ROTATE_180)
 
     target_width = 480
     target_height = 800
@@ -60,11 +67,13 @@ def process_illustration_image(
     max_height: int = 1200,
     grayscale: bool = False,
     quality: int = 85,
+    rotation: int = 0,
 ) -> bytes:
     """本文挿絵をアスペクト比維持で縮小し、カラー（または白黒）のJPEGバイト列へ変換する。
     
     クロップ（切り抜き）は行わず、イラストが見切れないように画面内に収める。
     透明チャンネルを持つ画像は白背景で合成する。
+    xteink等の横変え・縦読み端末用に回転オプション（90度左回転など）に対応。
     """
     if isinstance(image_data, bytes):
         fp = io.BytesIO(image_data)
@@ -85,9 +94,17 @@ def process_illustration_image(
         elif img.mode != "RGB" and not grayscale:
             img = img.convert("RGB")
 
+        if rotation == 90:
+            img = img.transpose(Image.Transpose.ROTATE_90)
+        elif rotation == 270:
+            img = img.transpose(Image.Transpose.ROTATE_270)
+        elif rotation == 180:
+            img = img.transpose(Image.Transpose.ROTATE_180)
+
         orig_w, orig_h = img.size
-        if orig_w > max_width or orig_h > max_height:
-            ratio = min(max_width / orig_w, max_height / orig_h)
+        limit_w, limit_h = (max_height, max_width) if rotation in (90, 270) else (max_width, max_height)
+        if orig_w > limit_w or orig_h > limit_h:
+            ratio = min(limit_w / orig_w, limit_h / orig_h)
             new_size = (int(orig_w * ratio), int(orig_h * ratio))
             img = img.resize(new_size, Image.Resampling.LANCZOS)
 

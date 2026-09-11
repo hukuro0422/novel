@@ -107,3 +107,45 @@ class EpubBuilderTests(unittest.TestCase):
                 self.assertIn("EPUB/cover.jpg", names)
                 self.assertNotIn("EPUB/cover.png", names)
 
+    def test_illustration_and_cover_rotation(self):
+        import io
+        from PIL import Image
+
+        with tempfile.TemporaryDirectory() as directory:
+            dummy_illust = Path(directory) / "test_illust.png"
+            # 縦長画像 (幅100, 高さ200)
+            img = Image.new("RGB", (100, 200), (255, 0, 0))
+            img.save(dummy_illust, format="PNG")
+
+            dummy_cover = Path(directory) / "test_cover.png"
+            c_img = Image.new("RGB", (100, 200), (0, 255, 0))
+            c_img.save(dummy_cover, format="PNG")
+
+            output = write_epub(
+                main_title="回転テスト作品",
+                volume_title="第一章",
+                episodes=[
+                    {
+                        "id": "1",
+                        "title": "挿絵のある回",
+                        "body": f'<p><img src="{dummy_illust.as_posix()}" alt="テスト挿絵"/></p>',
+                    }
+                ],
+                file_index=1,
+                folder_path=directory,
+                site_name="テスト",
+                cover_path=str(dummy_cover),
+                illustration_rotation=90,
+            )
+
+            with zipfile.ZipFile(output) as archive:
+                # 挿絵画像を取り出して検証 (90度回転で 幅200, 高さ100 になっているはず)
+                illust_bytes = archive.read("EPUB/images/illust_0001.jpg")
+                with Image.open(io.BytesIO(illust_bytes)) as pil_img:
+                    self.assertEqual(pil_img.size, (200, 100))
+
+                # 表紙画像を取り出して検証 (90度回転で 幅200, 高さ100 になっているはず)
+                cover_bytes = archive.read("EPUB/cover.jpg")
+                with Image.open(io.BytesIO(cover_bytes)) as pil_cover:
+                    self.assertEqual(pil_cover.size, (200, 100))
+

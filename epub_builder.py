@@ -19,18 +19,19 @@ def _fetch_and_process_image(
     src: str,
     session: requests.Session | None = None,
     grayscale: bool = False,
+    rotation: int = 0,
 ) -> bytes | None:
     """挿絵画像をダウンロードまたはローカルから読み込み、JPEG最適化して返す。"""
     try:
         if os.path.exists(src):
             with open(src, "rb") as f:
-                return process_illustration_image(f.read(), grayscale=grayscale)
+                return process_illustration_image(f.read(), grayscale=grayscale, rotation=rotation)
 
         if src.startswith("http://") or src.startswith("https://"):
             client = session or requests
             res = client.get(src, timeout=15)
             if res.status_code == 200 and res.content:
-                return process_illustration_image(res.content, grayscale=grayscale)
+                return process_illustration_image(res.content, grayscale=grayscale, rotation=rotation)
     except Exception as e:
         print(f"挿絵取得スキップ ({src}): {e}")
     return None
@@ -90,6 +91,7 @@ def write_epub(
     cover_path: str | None = None,
     session: requests.Session | None = None,
     grayscale_illustrations: bool = False,
+    illustration_rotation: int = 0,
 ) -> str | None:
     """一つの章・巻をEPUBとして書き出す。"""
     if not episodes:
@@ -158,10 +160,16 @@ def write_epub(
             import io
             with Image.open(io.BytesIO(cover_bytes)) as c_img:
                 c_img = ImageOps.exif_transpose(c_img)
-                if c_img.format != "JPEG" or c_img.mode not in ("RGB", "L"):
-                    buf = io.BytesIO()
-                    c_img.convert("RGB").save(buf, format="JPEG", quality=85)
-                    cover_bytes = buf.getvalue()
+                if illustration_rotation == 90:
+                    c_img = c_img.transpose(Image.Transpose.ROTATE_90)
+                elif illustration_rotation == 270:
+                    c_img = c_img.transpose(Image.Transpose.ROTATE_270)
+                elif illustration_rotation == 180:
+                    c_img = c_img.transpose(Image.Transpose.ROTATE_180)
+
+                buf = io.BytesIO()
+                c_img.convert("RGB").save(buf, format="JPEG", quality=85)
+                cover_bytes = buf.getvalue()
         except Exception:
             pass
 
@@ -190,6 +198,7 @@ def write_epub(
                     src,
                     session=session,
                     grayscale=grayscale_illustrations,
+                    rotation=illustration_rotation,
                 )
                 if img_bytes:
                     img_file_name = f"images/illust_{image_counter:04d}.jpg"
