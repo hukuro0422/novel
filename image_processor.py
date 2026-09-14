@@ -10,7 +10,7 @@ from typing import BinaryIO
 from PIL import Image
 
 
-def process_cover_image(uploaded_file: BinaryIO | None, rotation: int = 0) -> str | None:
+def process_cover_image(uploaded_file: BinaryIO | None) -> str | None:
     """アップロードされた表紙画像を480x800にリサイズ・中央クロップ・白黒化して一時ファイルに保存する。"""
     if uploaded_file is None:
         return None
@@ -24,13 +24,6 @@ def process_cover_image(uploaded_file: BinaryIO | None, rotation: int = 0) -> st
         img = ImageOps.exif_transpose(img)
     except Exception:
         pass
-
-    if rotation == 90:
-        img = img.transpose(Image.Transpose.ROTATE_90)
-    elif rotation == 270:
-        img = img.transpose(Image.Transpose.ROTATE_270)
-    elif rotation == 180:
-        img = img.transpose(Image.Transpose.ROTATE_180)
 
     target_width = 480
     target_height = 800

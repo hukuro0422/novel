@@ -934,10 +934,7 @@ def download_and_manage_page(update_only=False):
         # 登録済みかつ表紙が新たに選ばれた場合、その場での単体更新ボタンを表示
         if is_already_registered and cover:
             if st.button("表紙画像のみを今すぐ更新"):
-                processed_path = process_cover_image(
-                    cover,
-                    rotation=st.session_state.illustration_rotation,
-                )
+                processed_path = process_cover_image(cover)
                 if processed_path and os.path.exists(processed_path):
                     with open(processed_path, "rb") as f:
                         processed_bytes = BytesIO(f.read())
@@ -990,7 +987,7 @@ def download_and_manage_page(update_only=False):
             else 0
         )
         selected_rotation = st.selectbox(
-            "挿絵・表紙の回転（電子ペーパー向け）",
+            "挿絵の回転（電子ペーパー向け）",
             options=rotation_options_keys,
             index=default_rot_idx,
             format_func=lambda k: ROTATION_OPTIONS[k],
@@ -1011,7 +1008,7 @@ def download_and_manage_page(update_only=False):
             
             # 表紙の処理
             if cover:
-                cover_path = process_cover_image(cover, rotation=selected_rotation)
+                cover_path = process_cover_image(cover)
                 if cover_path and os.path.exists(cover_path):
                     with open(cover_path, "rb") as f:
                         cover_bytes = BytesIO(f.read())
@@ -1255,7 +1252,7 @@ def settings_page():
         else 0
     )
     new_rot = st.selectbox(
-        "デフォルトの挿絵・表紙の回転",
+        "デフォルトの挿絵の回転",
         options=rotation_keys,
         index=current_rot_idx,
         format_func=lambda k: ROTATION_OPTIONS[k],

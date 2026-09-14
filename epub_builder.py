@@ -160,16 +160,10 @@ def write_epub(
             import io
             with Image.open(io.BytesIO(cover_bytes)) as c_img:
                 c_img = ImageOps.exif_transpose(c_img)
-                if illustration_rotation == 90:
-                    c_img = c_img.transpose(Image.Transpose.ROTATE_90)
-                elif illustration_rotation == 270:
-                    c_img = c_img.transpose(Image.Transpose.ROTATE_270)
-                elif illustration_rotation == 180:
-                    c_img = c_img.transpose(Image.Transpose.ROTATE_180)
-
-                buf = io.BytesIO()
-                c_img.convert("RGB").save(buf, format="JPEG", quality=85)
-                cover_bytes = buf.getvalue()
+                if c_img.format != "JPEG" or c_img.mode not in ("RGB", "L"):
+                    buf = io.BytesIO()
+                    c_img.convert("RGB").save(buf, format="JPEG", quality=85)
+                    cover_bytes = buf.getvalue()
         except Exception:
             pass
 

@@ -107,7 +107,7 @@ class EpubBuilderTests(unittest.TestCase):
                 self.assertIn("EPUB/cover.jpg", names)
                 self.assertNotIn("EPUB/cover.png", names)
 
-    def test_illustration_and_cover_rotation(self):
+    def test_illustration_rotation_leaves_cover_unrotated(self):
         import io
         from PIL import Image
 
@@ -144,8 +144,9 @@ class EpubBuilderTests(unittest.TestCase):
                 with Image.open(io.BytesIO(illust_bytes)) as pil_img:
                     self.assertEqual(pil_img.size, (200, 100))
 
-                # 表紙画像を取り出して検証 (90度回転で 幅200, 高さ100 になっているはず)
+                # 表紙画像を取り出して検証 (表紙は回転されず 元の縦長 幅100, 高さ200 のまま)
                 cover_bytes = archive.read("EPUB/cover.jpg")
                 with Image.open(io.BytesIO(cover_bytes)) as pil_cover:
-                    self.assertEqual(pil_cover.size, (200, 100))
+                    self.assertEqual(pil_cover.size, (100, 200))
+
 
